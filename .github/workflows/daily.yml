@@ -1,0 +1,39 @@
+name: daily-codes
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-codes
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate codes
+        env:
+          REGION: gh
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          LLM_KEY: ${{ secrets.LLM_KEY }}
+          LLM_URL: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+          LLM_MODEL: gemini-2.0-flash
+        run: node bin/sb.js
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codes
+          path: codes/
+          if-no-files-found: ignore
+

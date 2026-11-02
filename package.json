@@ -1,0 +1,16 @@
+{
+  "name": "sb-codes",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daily SportyBet booking-code generator with safety ranking and Telegram delivery",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "bin": { "sb-codes": "bin/sb.js" },
+  "scripts": {
+    "start": "node bin/sb.js",
+    "dry": "node bin/sb.js --dry",
+    "test-leg": "node bin/sb.js --test",
+    "ping": "node bin/sb.js --ping"
+  }
+}
+
