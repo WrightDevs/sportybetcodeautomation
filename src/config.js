@@ -20,6 +20,7 @@ const list = (k, d) => E(k, d).split(',').map(s => s.trim()).filter(Boolean);
 
 const CFG = {
   REGION: E('REGION', 'gh').toLowerCase(),
+  LIVE_ENDPOINT: E('LIVE_ENDPOINT', 'inplayEvents'),
   SPORTS: list('SPORTS', 'sr:sport:1'),
   SURE_ONLY: E('SURE_ONLY', 'true') === 'true',
   VIRTUAL_WINDOW_MIN: N('VIRTUAL_WINDOW_MIN', 25),
