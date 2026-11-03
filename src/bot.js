@@ -11,10 +11,13 @@ const {
   revokeSubscription,
   listSubscribers
 } = require('./subs');
+const { verifyQuestPay } = require('./questpay');
+const { startWebhookServer } = require('./webhook');
 
 const API = `https://api.telegram.org/bot${CFG.TG_TOKEN}`;
 const busy = new Set();
 const awaitingProof = new Map(); // chatId => timestamp
+const awaitingQuestPayRef = new Map(); // chatId => timestamp
 
 async function call(method, body) {
   const r = await fetch(`${API}/${method}`, {
@@ -45,6 +48,7 @@ function getPaywallMenu() {
   const buttons = [];
   if (CFG.QUESTPAY_LINK) {
     buttons.push([{ text: `💳 Pay ₦${CFG.SUB_PRICE.toLocaleString()} via QuestPay`, url: CFG.QUESTPAY_LINK }]);
+    buttons.push([{ text: '🔄 Verify QuestPay Reference', callback_data: 'verify_questpay' }]);
   }
   buttons.push([{ text: `🏦 Bank Transfer (₦${CFG.SUB_PRICE.toLocaleString()})`, callback_data: 'pay_transfer' }]);
   buttons.push([{ text: 'ℹ️ Check Subscription Status', callback_data: 'sub_status' }]);
@@ -61,7 +65,7 @@ const HELP = `<b>Welcome to SportyBet Daily Codes VIP!</b>\n\n`
 function sendPaywall(chat) {
   const text = `🔒 <b>VIP Subscription Required</b>\n\n`
     + `Access to daily codes costs <b>₦${CFG.SUB_PRICE.toLocaleString()} / ${CFG.SUB_DAYS} days</b>.\n\n`
-    + `Choose your preferred payment method below to unlock:`;
+    + `Choose your preferred payment method below:`;
   return send(chat, text, { reply_markup: getPaywallMenu() });
 }
 
@@ -154,6 +158,22 @@ async function poll() {
   let offset = 0;
   console.log('bot polling with VIP subscription system active');
 
+  // Start built-in zero-dependency webhook server for QuestPay
+  startWebhookServer(async (chatId, reference, amount) => {
+    const sub = getSubscription(chatId);
+    await send(chatId, `🎉 <b>Payment Confirmed via QuestPay!</b>\n\n`
+      + `Your VIP Subscription is now <b>ACTIVE</b> for ${CFG.SUB_DAYS} days!\n`
+      + `Expires on: <b>${sub.expDate}</b>.\n\n`
+      + `Select a sport to generate codes:`, { reply_markup: sportsMenu });
+
+    if (CFG.ADMIN_ID) {
+      await send(CFG.ADMIN_ID, `🔔 <b>QuestPay Webhook Success!</b>\n\n`
+        + `• <b>User ID:</b> <code>${chatId}</code>\n`
+        + `• <b>Reference:</b> <code>${reference}</code>\n`
+        + `• <b>Amount:</b> ₦${(amount || CFG.SUB_PRICE).toLocaleString()}`);
+    }
+  });
+
   for (;;) {
     try {
       const r = await fetch(`${API}/getUpdates?timeout=50&offset=${offset}`);
@@ -177,6 +197,9 @@ async function poll() {
             handleStatus(chat);
           } else if (data === 'pay_transfer') {
             await sendBankDetails(chat);
+          } else if (data === 'verify_questpay') {
+            awaitingQuestPayRef.set(chat, Date.now());
+            await send(chat, '🔄 <b>Verify QuestPay Payment</b>\n\nPlease reply with your <b>QuestPay Transaction Reference</b> (e.g. <code>QP_...</code> or transaction ID):');
           } else if (data === 'submit_proof') {
             awaitingProof.set(chat, Date.now());
             await send(chat, '📝 <b>Submit Payment Proof</b>\n\nPlease send your <b>payment receipt screenshot</b> or reply with your <b>Sender Account Name</b> and transaction reference:');
@@ -195,6 +218,45 @@ async function poll() {
         if (!msg) continue;
         const chat = msg.chat.id;
         const text = (msg.text || msg.caption || '').trim();
+
+        // Handle manual QuestPay reference verification fallback
+        if (awaitingQuestPayRef.has(chat) && text && !text.startsWith('/')) {
+          awaitingQuestPayRef.delete(chat);
+          await send(chat, '🔍 Checking QuestPay transaction reference…');
+
+          const res = await verifyQuestPay(text);
+          if (res.ok && res.status === 'success') {
+            addSubscription(chat, CFG.SUB_DAYS, { method: 'questpay_manual_verify', reference: text, amount: res.amount });
+            const sub = getSubscription(chat);
+            await send(chat, `🎉 <b>Payment Verified!</b>\n\nYour VIP Subscription is now <b>ACTIVE</b>!\nExpires on: <b>${sub.expDate}</b>.`, { reply_markup: sportsMenu });
+            if (CFG.ADMIN_ID) {
+              await send(CFG.ADMIN_ID, `✅ <b>QuestPay Auto-Verified</b>\nUser: <code>${chat}</code> | Ref: <code>${text}</code>`);
+            }
+          } else {
+            // Forward to Admin for manual fallback verification so user isn't stuck
+            const userName = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'none'})`.trim() : 'Anonymous';
+            await send(chat, '⏳ Your QuestPay reference could not be auto-verified by the API. It has been forwarded to the admin for manual approval. You will receive an instant notification once confirmed.');
+
+            if (CFG.ADMIN_ID) {
+              const adminText = `🔔 <b>QuestPay Manual Verification Request</b>\n\n`
+                + `• <b>User:</b> ${userName}\n`
+                + `• <b>Chat ID:</b> <code>${chat}</code>\n`
+                + `• <b>QuestPay Ref:</b> <code>${text}</code>\n`
+                + `• <b>Status:</b> ${res.err || 'Unverified'}`;
+
+              const reply_markup = {
+                inline_keyboard: [
+                  [
+                    { text: '✅ Approve (7 Days)', callback_data: `approve:${chat}:${CFG.SUB_DAYS}` },
+                    { text: '❌ Reject', callback_data: `reject:${chat}` }
+                  ]
+                ]
+              };
+              await send(CFG.ADMIN_ID, adminText, { reply_markup });
+            }
+          }
+          continue;
+        }
 
         // Handle user payment proof submission (Text, Photo Screenshot, or Document)
         if (awaitingProof.has(chat) && !text.startsWith('/')) {
