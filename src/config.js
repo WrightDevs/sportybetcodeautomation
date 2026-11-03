@@ -43,7 +43,7 @@ const CFG = {
 
   // VIP Subscription & Billing
   ADMIN_ID: E('ADMIN_ID', '6916043986'),
-  SUB_PRICE: N('SUB_PRICE', 2000),
+  SUB_PRICE: N('SUB_PRICE', 1000),
   SUB_DAYS: N('SUB_DAYS', 7),
   QUESTPAY_LINK: E('QUESTPAY_LINK', ''),
   QUESTPAY_API_KEY: E('QUESTPAY_API_KEY', ''),
