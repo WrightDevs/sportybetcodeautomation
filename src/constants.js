@@ -17,11 +17,14 @@ const totalOf = spec => parseFloat((/total=([\d.]+)/.exec(spec || '') || [])[1] 
 /* virtual weight — Over 0.5 is near-certain in a 3-minute match; 1X2 is not */
 function virtualWeight(marketId, outcomeDesc, specifier) {
   const total = totalOf(specifier);
+  const isOver = String(outcomeDesc || '').startsWith('Over');
+  const isUnder = String(outcomeDesc || '').startsWith('Under');
+
   if (marketId === '18') {
-    if (outcomeDesc === 'Over' && total <= 0.5) return 1.00;
-    if (outcomeDesc === 'Under' && total >= 5.5) return 0.95;
-    if (outcomeDesc === 'Under' && total >= 4.5) return 0.88;
-    if (outcomeDesc === 'Over' && total <= 1.5) return 0.82;
+    if (isOver && total <= 0.5) return 1.00;
+    if (isUnder && total >= 5.5) return 0.95;
+    if (isUnder && total >= 4.5) return 0.88;
+    if (isOver && total <= 1.5) return 0.82;
     return 0.60;
   }
   if (marketId === '10') return 0.97;

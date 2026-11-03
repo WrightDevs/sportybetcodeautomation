@@ -17,7 +17,7 @@ const PRESETS = {
     legs: 10, maxCodes: 1, gap: 20000,
     llm: false, leagueCap: 40, virtual: true,
     rule: { early: 40, mid: 70, late: 80, margin: 3 },
-    fallbackUpcoming: { windowMin: 12 }
+    fallbackUpcoming: { windowMin: 20 }
   },
   vfootball: {
     label: 'vFootball', icon: '⚡',
@@ -28,7 +28,7 @@ const PRESETS = {
     llm: false, leagueCap: 40, virtual: true,
     /* compressed clock — the threshold has to arrive sooner */
     rule: { early: 55, mid: 75, late: 85, margin: 2 },
-    fallbackUpcoming: { windowMin: 5 }
+    fallbackUpcoming: { windowMin: 20 }
   }
 };
 
