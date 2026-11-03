@@ -11,7 +11,6 @@ const {
   revokeSubscription,
   listSubscribers
 } = require('./subs');
-const { initializePayment, verifyPayment } = require('./paystack');
 
 const API = `https://api.telegram.org/bot${CFG.TG_TOKEN}`;
 const busy = new Set();
@@ -42,13 +41,15 @@ const sportsMenu = {
   ]]
 };
 
-const paywallMenu = {
-  inline_keyboard: [
-    ...(CFG.PAYSTACK_SECRET ? [[{ text: `💳 Pay ₦${CFG.SUB_PRICE.toLocaleString()} Online (Paystack)`, callback_data: 'pay_online' }]] : []),
-    [{ text: `🏦 Bank Transfer (₦${CFG.SUB_PRICE.toLocaleString()})`, callback_data: 'pay_transfer' }],
-    [{ text: 'ℹ️ Check Subscription Status', callback_data: 'sub_status' }]
-  ]
-};
+function getPaywallMenu() {
+  const buttons = [];
+  if (CFG.QUESTPAY_LINK) {
+    buttons.push([{ text: `💳 Pay ₦${CFG.SUB_PRICE.toLocaleString()} via QuestPay`, url: CFG.QUESTPAY_LINK }]);
+  }
+  buttons.push([{ text: `🏦 Bank Transfer (₦${CFG.SUB_PRICE.toLocaleString()})`, callback_data: 'pay_transfer' }]);
+  buttons.push([{ text: 'ℹ️ Check Subscription Status', callback_data: 'sub_status' }]);
+  return { inline_keyboard: buttons };
+}
 
 const HELP = `<b>Welcome to SportyBet Daily Codes VIP!</b>\n\n`
   + `Select a sport below to generate fresh, ranked booking codes:\n\n`
@@ -61,7 +62,7 @@ function sendPaywall(chat) {
   const text = `🔒 <b>VIP Subscription Required</b>\n\n`
     + `Access to daily codes costs <b>₦${CFG.SUB_PRICE.toLocaleString()} / ${CFG.SUB_DAYS} days</b>.\n\n`
     + `Choose your preferred payment method below to unlock:`;
-  return send(chat, text, { reply_markup: paywallMenu });
+  return send(chat, text, { reply_markup: getPaywallMenu() });
 }
 
 function sendBankDetails(chat) {
@@ -75,70 +76,16 @@ function sendBankDetails(chat) {
     + `• <b>Account Number:</b> <code>${accNum}</code>\n`
     + `• <b>Account Name:</b> <code>${accName}</code>\n`
     + `• <b>Amount:</b> <b>₦${CFG.SUB_PRICE.toLocaleString()}</b>\n\n`
-    + `After making the transfer, tap <b>"I Have Paid"</b> below to submit your sender name:`;
+    + `After making the transfer, tap <b>"I Have Paid (Send Proof)"</b> below to submit your receipt screenshot or sender name:`;
 
   const reply_markup = {
     inline_keyboard: [
-      [{ text: '📝 I Have Paid (Submit Proof)', callback_data: 'submit_proof' }],
+      [{ text: '📝 I Have Paid (Send Proof)', callback_data: 'submit_proof' }],
       [{ text: '🔙 Back', callback_data: 'menu' }]
     ]
   };
 
   return send(chat, text, { reply_markup });
-}
-
-async function handlePayOnline(chat) {
-  await send(chat, '⏳ Generating your secure Paystack payment link…');
-  const res = await initializePayment(chat);
-
-  if (!res.ok) {
-    return send(chat, `❌ Failed to initialize Paystack: ${res.err}\n\nPlease use Bank Transfer instead:`, {
-      reply_markup: {
-        inline_keyboard: [[{ text: '🏦 Pay via Bank Transfer', callback_data: 'pay_transfer' }]]
-      }
-    });
-  }
-
-  const text = `💳 <b>Paystack Checkout</b>\n\n`
-    + `Amount: <b>₦${CFG.SUB_PRICE.toLocaleString()}</b> (Valid for ${CFG.SUB_DAYS} Days)\n\n`
-    + `Click <b>"Open Payment Link"</b> below to pay with Card, Bank Transfer, or USSD.\n\n`
-    + `Once paid, tap <b>"Check Payment Status"</b> to unlock immediately!`;
-
-  const reply_markup = {
-    inline_keyboard: [
-      [{ text: '🌐 Open Payment Link', url: res.url }],
-      [{ text: '🔄 Check Payment Status', callback_data: `verify:${res.reference}` }],
-      [{ text: '🔙 Back', callback_data: 'menu' }]
-    ]
-  };
-
-  return send(chat, text, { reply_markup });
-}
-
-async function handleVerifyPayment(chat, messageId, reference) {
-  await send(chat, '🔍 Verifying payment with Paystack…');
-  const res = await verifyPayment(reference);
-
-  if (res.ok && res.status === 'success') {
-    addSubscription(chat, res.days, { method: 'paystack', reference, amount: res.amount });
-    const sub = getSubscription(chat);
-    const text = `🎉 <b>Payment Confirmed!</b>\n\n`
-      + `Your VIP Subscription is now <b>ACTIVE</b>!\n`
-      + `Expires on: <b>${sub.expDate}</b> (${sub.daysLeft} days remaining).\n\n`
-      + `Tap a sport below to generate codes:`;
-    return send(chat, text, { reply_markup: sportsMenu });
-  }
-
-  return send(chat, `⚠️ <b>Payment Not Confirmed Yet</b>\n\n`
-    + `${res.err || 'We have not received payment for this reference yet.'}\n\n`
-    + `If you already transferred, please wait a minute and tap Verify again.`, {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '🔄 Check Again', callback_data: `verify:${reference}` }],
-        [{ text: '🔙 Back', callback_data: 'menu' }]
-      ]
-    }
-  });
 }
 
 async function handleSport(chat, key) {
@@ -181,7 +128,7 @@ function handleStatus(chat) {
   }
   return send(chat, `❌ <b>VIP Status: INACTIVE</b>\n\n`
     + `You do not have an active subscription.\n`
-    + `Subscribe for ₦${CFG.SUB_PRICE.toLocaleString()} / ${CFG.SUB_DAYS} days to access daily codes.`, { reply_markup: paywallMenu });
+    + `Subscribe for ₦${CFG.SUB_PRICE.toLocaleString()} / ${CFG.SUB_DAYS} days to access daily codes.`, { reply_markup: getPaywallMenu() });
 }
 
 async function handleAdminApprove(adminChat, messageId, targetChat, days) {
@@ -189,7 +136,7 @@ async function handleAdminApprove(adminChat, messageId, targetChat, days) {
   addSubscription(targetChat, days, { approvedBy: adminChat, method: 'manual' });
   const sub = getSubscription(targetChat);
 
-  await editMessage(adminChat, messageId, `✅ <b>Approved!</b>\nUser: <code>${targetChat}</code> is active for ${days} days (until ${sub.expDate}).`);
+  await editMessage(adminChat, messageId, `✅ <b>Approved!</b>\nUser <code>${targetChat}</code> is active for ${days} days (until ${sub.expDate}).`);
   await send(targetChat, `🎉 <b>Payment Approved!</b>\n\n`
     + `Your VIP Subscription has been activated by the admin for <b>${days} days</b>!\n`
     + `Expires on: <b>${sub.expDate}</b>.\n\n`
@@ -228,19 +175,14 @@ async function poll() {
             else await sendPaywall(chat);
           } else if (data === 'sub_status') {
             handleStatus(chat);
-          } else if (data === 'pay_online') {
-            await handlePayOnline(chat);
           } else if (data === 'pay_transfer') {
             await sendBankDetails(chat);
           } else if (data === 'submit_proof') {
-            awaitatingProof.set(chat, Date.now());
-            await send(chat, '📝 <b>Submit Payment Proof</b>\n\nPlease reply to this chat with your <b>Sender Account Name</b>, <b>Bank Name</b>, or <b>Transaction Reference</b>:');
-          } else if (data.startsWith('verify:')) {
-            const ref = data.slice('verify:'.length);
-            await handleVerifyPayment(chat, cb.message.message_id, ref);
+            awaitingProof.set(chat, Date.now());
+            await send(chat, '📝 <b>Submit Payment Proof</b>\n\nPlease send your <b>payment receipt screenshot</b> or reply with your <b>Sender Account Name</b> and transaction reference:');
           } else if (data.startsWith('approve:')) {
             const [, targetChat, days] = data.split(':');
-            await handleAdminApprove(chat, cb.message.message_id, targetChat, Number(days) || 7);
+            await handleAdminApprove(chat, cb.message.message_id, targetChat, Number(days) || CFG.SUB_DAYS);
           } else if (data.startsWith('reject:')) {
             const [, targetChat] = data.split(':');
             await handleAdminReject(chat, cb.message.message_id, targetChat);
@@ -252,32 +194,51 @@ async function poll() {
 
         if (!msg) continue;
         const chat = msg.chat.id;
-        const text = (msg.text || '').trim();
+        const text = (msg.text || msg.caption || '').trim();
 
-        // Handle user payment proof submission
-        if (awaitingProof.has(chat) && text && !text.startsWith('/')) {
+        // Handle user payment proof submission (Text, Photo Screenshot, or Document)
+        if (awaitingProof.has(chat) && !text.startsWith('/')) {
           awaitingProof.delete(chat);
           const userName = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'none'})`.trim() : 'Anonymous';
 
-          await send(chat, '✅ <b>Payment Proof Received!</b>\n\nYour details have been submitted to the admin for verification. You will receive an instant notification once approved.');
+          await send(chat, '✅ <b>Payment Proof Received!</b>\n\nYour proof has been submitted to the admin for verification. You will receive an instant notification here once approved.');
 
-          // Forward to Admin
-          if (CFG.ADMIN_ID) {
-            const adminText = `🔔 <b>New Bank Transfer Claim!</b>\n\n`
-              + `• <b>User:</b> ${userName}\n`
-              + `• <b>Chat ID:</b> <code>${chat}</code>\n`
-              + `• <b>Proof/Details:</b> <code>${text}</code>\n`
-              + `• <b>Amount Expected:</b> ₦${CFG.SUB_PRICE.toLocaleString()}`;
+          const adminCaption = `🔔 <b>New Bank Transfer Proof!</b>\n\n`
+            + `• <b>User:</b> ${userName}\n`
+            + `• <b>Chat ID:</b> <code>${chat}</code>\n`
+            + (text ? `• <b>Details/Note:</b> <code>${text}</code>\n` : '')
+            + `• <b>Amount Expected:</b> ₦${CFG.SUB_PRICE.toLocaleString()}`;
 
-            const reply_markup = {
-              inline_keyboard: [
-                [
-                  { text: '✅ Approve (7 Days)', callback_data: `approve:${chat}:${CFG.SUB_DAYS}` },
-                  { text: '❌ Reject', callback_data: `reject:${chat}` }
-                ]
+          const reply_markup = {
+            inline_keyboard: [
+              [
+                { text: '✅ Approve (7 Days)', callback_data: `approve:${chat}:${CFG.SUB_DAYS}` },
+                { text: '❌ Reject', callback_data: `reject:${chat}` }
               ]
-            };
-            await send(CFG.ADMIN_ID, adminText, { reply_markup });
+            ]
+          };
+
+          if (CFG.ADMIN_ID) {
+            if (msg.photo && msg.photo.length > 0) {
+              const bestPhoto = msg.photo[msg.photo.length - 1].file_id;
+              await call('sendPhoto', {
+                chat_id: CFG.ADMIN_ID,
+                photo: bestPhoto,
+                caption: adminCaption,
+                parse_mode: 'HTML',
+                reply_markup
+              });
+            } else if (msg.document) {
+              await call('sendDocument', {
+                chat_id: CFG.ADMIN_ID,
+                document: msg.document.file_id,
+                caption: adminCaption,
+                parse_mode: 'HTML',
+                reply_markup
+              });
+            } else {
+              await send(CFG.ADMIN_ID, adminCaption, { reply_markup });
+            }
           }
           continue;
         }
@@ -323,7 +284,7 @@ async function poll() {
           if (!subs.length) {
             await send(chat, '📋 No active paid subscribers.');
           } else {
-            const lines = subs.map((s, i) => `${i + 1}. <code>${s.chatId}</code> — ${s.daysLeft} days left (${s.expDate})`);
+            const lines = subs.map((s, i) => `${i + 1}. <code>${s.chatId}</code> (${s.name}) — ${s.daysLeft} days left (${s.expDate})`);
             await send(chat, `📋 <b>Active Subscribers (${subs.length})</b>:\n\n` + lines.join('\n'));
           }
         } else {
