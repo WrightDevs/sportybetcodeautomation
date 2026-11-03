@@ -3,5 +3,6 @@ node_modules/
 codes/
 run.log
 *.log
+subscribers.json
+data/
 .DS_Store
-

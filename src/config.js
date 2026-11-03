@@ -39,7 +39,16 @@ const CFG = {
   LLM_KEY: E('LLM_KEY', ''),
   TG_TOKEN: E('TG_TOKEN', ''),
   TG_CHAT: E('TG_CHAT', ''),
-  OUT_DIR: path.join(ROOT, 'codes')
+  OUT_DIR: path.join(ROOT, 'codes'),
+
+  // VIP Subscription & Billing
+  ADMIN_ID: E('ADMIN_ID', '6916043986'),
+  SUB_PRICE: N('SUB_PRICE', 2000),
+  SUB_DAYS: N('SUB_DAYS', 7),
+  PAYSTACK_SECRET: E('PAYSTACK_SECRET', ''),
+  BANK_NAME: E('BANK_NAME', 'OPay'),
+  ACCOUNT_NUMBER: E('ACCOUNT_NUMBER', ''),
+  ACCOUNT_NAME: E('ACCOUNT_NAME', '')
 };
 
 CFG.VIRTUAL = CFG.SPORTS.some(s => s !== 'sr:sport:1');
