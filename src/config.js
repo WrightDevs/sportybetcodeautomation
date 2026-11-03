@@ -6,9 +6,11 @@ const ROOT = path.join(__dirname, '..');
 const envFile = path.join(ROOT, '.env');
 
 if (fs.existsSync(envFile)) {
-  for (const line of fs.readFileSync(envFile, 'utf8').split('\n')) {
-    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
-    if (m) process.env[m[1]] ??= m[2].replace(/^['"]|['"]$/g, '');
+  for (const rawLine of fs.readFileSync(envFile, 'utf8').split('\n')) {
+    const line = rawLine.replace(/\r$/, '').trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = /^([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+    if (m) process.env[m[1]] ??= m[2].trim().replace(/^['"]|['"]$/g, '');
   }
 }
 
@@ -34,4 +36,3 @@ const CFG = {
 };
 
 module.exports = { CFG, ROOT };
-
