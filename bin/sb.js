@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 'use strict';
-const { run } = require('../src');
+
+if (process.argv.includes('--virtual')) {
+  process.env.SPORTS = 'sr:sport:202120001,sr:sport:137';
+  process.env.SURE_ONLY ??= 'true';
+  process.env.VIRTUAL_WINDOW_MIN ??= '25';
+  process.env.LEGS_PER_CODE ??= '25';
+  process.env.MAX_CODES ??= '2';
+}
 
 const getArg = (flag) => {
   const idx = process.argv.indexOf(flag);
@@ -12,6 +19,8 @@ const getArg = (flag) => {
   if (match) return match.slice(prefix.length);
   return null;
 };
+
+const { run } = require('../src');
 
 run({
   dry: process.argv.includes('--dry'),

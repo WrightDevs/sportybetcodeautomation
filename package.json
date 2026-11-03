@@ -15,6 +15,8 @@
     "dry": "node bin/sb.js --dry",
     "10odds": "node bin/sb.js --odds 10",
     "dry-10": "node bin/sb.js --dry --odds 10",
+    "virtual": "node bin/sb.js --virtual",
+    "dry-virtual": "node bin/sb.js --dry --virtual",
     "test-leg": "node bin/sb.js --test",
     "ping": "node bin/sb.js --ping"
   }

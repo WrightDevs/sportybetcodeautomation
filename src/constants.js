@@ -7,10 +7,30 @@ const DESC = {
   '29': 'GG/NG', '26': 'Home goals', '36': 'Away goals', '14': 'Handicap'
 };
 
-/* market safety weight — DC on a favourite is the safest shape in this band */
+/* real-football safety weight — DC on a favourite is the safest shape in this band */
 const WEIGHT = { '10': 1.00, '11': 0.95, '26': 0.90, '18': 0.88, '36': 0.85, '1': 0.70, '29': 0.60, '14': 0.55 };
+
+const VIRTUAL_SPORTS = new Set(['sr:sport:137', 'sr:sport:202120001']);
+
+const totalOf = spec => parseFloat((/total=([\d.]+)/.exec(spec || '') || [])[1] || 0);
+
+/* virtual weight — Over 0.5 is near-certain in a 3-minute match; 1X2 is not */
+function virtualWeight(marketId, outcomeDesc, specifier) {
+  const total = totalOf(specifier);
+  if (marketId === '18') {
+    if (outcomeDesc === 'Over' && total <= 0.5) return 1.00;
+    if (outcomeDesc === 'Under' && total >= 5.5) return 0.95;
+    if (outcomeDesc === 'Under' && total >= 4.5) return 0.88;
+    if (outcomeDesc === 'Over' && total <= 1.5) return 0.82;
+    return 0.60;
+  }
+  if (marketId === '10') return 0.97;
+  if (marketId === '26' || marketId === '36') return 0.80;
+  if (marketId === '1') return 0.55;
+  if (marketId === '29') return 0.50;
+  return 0.45;
+}
 
 const JUNK = /(srl|esoccer|e-football|efootball|virtual|simulated|instant|cyber)/i;
 
-module.exports = { MARKETS, DESC, WEIGHT, JUNK };
-
+module.exports = { MARKETS, DESC, WEIGHT, VIRTUAL_SPORTS, virtualWeight, JUNK };

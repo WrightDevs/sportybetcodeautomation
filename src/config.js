@@ -16,9 +16,14 @@ if (fs.existsSync(envFile)) {
 
 const E = (k, d) => process.env[k] ?? d;
 const N = (k, d) => Number(E(k, d));
+const list = (k, d) => E(k, d).split(',').map(s => s.trim()).filter(Boolean);
 
 const CFG = {
   REGION: E('REGION', 'gh').toLowerCase(),
+  SPORTS: list('SPORTS', 'sr:sport:1'),
+  SURE_ONLY: E('SURE_ONLY', 'true') === 'true',
+  VIRTUAL_WINDOW_MIN: N('VIRTUAL_WINDOW_MIN', 25),
+  VIRTUAL_LEAGUE_CAP: N('VIRTUAL_LEAGUE_CAP', 40),
   MIN_ODDS: N('MIN_ODDS', 1.05),
   MAX_ODDS: N('MAX_ODDS', 1.25),
   TARGET: N('TARGET', 150),
@@ -35,5 +40,7 @@ const CFG = {
   TG_CHAT: E('TG_CHAT', ''),
   OUT_DIR: path.join(ROOT, 'codes')
 };
+
+CFG.VIRTUAL = CFG.SPORTS.some(s => s !== 'sr:sport:1');
 
 module.exports = { CFG, ROOT };
