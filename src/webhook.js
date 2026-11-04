@@ -214,26 +214,22 @@ function startWebhookServer(onPaymentActivated) {
       (async () => {
         const results = {};
         const testUrls = {
-          vfootball_inplay: `${API}/factsCenter/inplayEvents?sportId=sr:sport:202120001&pageSize=20&pageNum=1`,
-          efootball_inplay: `${API}/factsCenter/inplayEvents?sportId=sr:sport:137&pageSize=20&pageNum=1`,
-          all_inplay: `${API}/factsCenter/inplayEvents?pageSize=20&pageNum=1`,
-          vfootball_upcoming: `${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&pageSize=20&pageNum=1`
+          inplay_raw: `${API}/factsCenter/inplayEvents?sportId=sr:sport:202120001&_t=${Date.now()}`,
+          inplay_efootball: `${API}/factsCenter/inplayEvents?sportId=sr:sport:137&_t=${Date.now()}`,
+          inplay_no_filter: `${API}/factsCenter/inplayEvents?_t=${Date.now()}`,
+          vfootball_upcoming: `${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&todayGames=false&timeline=1&_t=${Date.now()}`
         };
 
         for (const [key, url] of Object.entries(testUrls)) {
           const j = await get(url);
-          const evs = j?.data?.tournaments?.flatMap(t => (t.events || []).map(e => ({
-            id: e.eventId,
-            name: `${e.homeTeamName} vs ${e.awayTeamName}`,
-            clock: e.matchClock,
-            minute: e.minute,
-            status: e.matchStatus,
-            score: `${e.homeScore ?? e.homeTeamScore ?? '?'}-${e.awayScore ?? e.awayTeamScore ?? '?'}`
-          }))) || [];
+          const dataType = Array.isArray(j?.data) ? 'array' : typeof j?.data;
+          const dataLength = Array.isArray(j?.data) ? j.data.length : (j?.data?.tournaments?.length || 0);
           results[key] = {
-            total: evs.length,
-            tournaments: (j?.data?.tournaments || []).length,
-            samples: evs.slice(0, 3)
+            bizCode: j?.bizCode,
+            message: j?.message,
+            dataType,
+            dataLength,
+            rawPreview: JSON.stringify(j || {}).slice(0, 300)
           };
         }
 
