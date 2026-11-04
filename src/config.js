@@ -39,6 +39,8 @@ const CFG = {
   LLM_KEY: E('LLM_KEY', ''),
   TG_TOKEN: E('TG_TOKEN', ''),
   TG_CHAT: E('TG_CHAT', ''),
+  TG_CLIENT_ID: E('TELEGRAM_CLIENT_ID', E('TG_CLIENT_ID', (E('TG_TOKEN', '').split(':')[0] || '9139530188'))),
+  TG_CLIENT_SECRET: E('TELEGRAM_CLIENT_SECRET', E('TG_CLIENT_SECRET', '')),
   OUT_DIR: path.join(ROOT, 'codes'),
 
   // VIP Subscription & Billing

@@ -75,6 +75,16 @@ When using `telegram-login.js` or OpenID Connect:
 }
 ```
 
+##### Option D: OpenID Connect Authorization Code (Client ID & Secret Flow)
+When using standard OAuth2 / OpenID Connect authorization code redirect flow:
+```json
+{
+  "code": "AUTH_CODE_FROM_TELEGRAM_REDIRECT",
+  "redirect_uri": "https://sportybetcodes.com/auth/callback"
+}
+```
+*The backend automatically exchanges the code with `https://oauth.telegram.org/token` using your bot's Client ID and Client Secret, decodes the claims, and verifies the subscription.*
+
 #### Success Response (`200 OK`)
 ```json
 {

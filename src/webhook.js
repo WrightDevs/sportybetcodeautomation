@@ -125,6 +125,69 @@ function verifyTelegramAuth(data, botToken, maxAgeSec = 86400) {
   return { ok: false, error: 'Missing Telegram hash or id_token' };
 }
 
+/**
+ * Exchange Telegram OAuth2 Authorization Code using Client ID and Client Secret
+ * Endpoint: https://oauth.telegram.org/token
+ */
+async function exchangeTelegramCode(code, redirectUri, clientId, clientSecret) {
+  if (!code) return { ok: false, error: 'Authorization code is required' };
+  const cId = clientId || CFG.TG_CLIENT_ID;
+  const cSec = clientSecret || CFG.TG_CLIENT_SECRET;
+
+  if (!cId || !cSec) {
+    return {
+      ok: false,
+      error: 'Telegram Client ID or Client Secret not configured. Set TELEGRAM_CLIENT_SECRET in .env or Render Environment.'
+    };
+  }
+
+  try {
+    const params = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: String(code).trim(),
+      client_id: String(cId).trim(),
+      client_secret: String(cSec).trim(),
+      redirect_uri: String(redirectUri || '').trim()
+    });
+
+    const resp = await fetch('https://oauth.telegram.org/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.id_token) {
+      return {
+        ok: false,
+        error: data.error_description || data.error || `Telegram token exchange failed (HTTP ${resp.status})`
+      };
+    }
+
+    const parts = String(data.id_token).split('.');
+    if (parts.length !== 3) {
+      return { ok: false, error: 'Malformed id_token received from Telegram' };
+    }
+
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return {
+      ok: true,
+      tokens: data,
+      user: {
+        id: payload.id || payload.sub,
+        first_name: payload.given_name || payload.name || '',
+        last_name: payload.family_name || '',
+        username: payload.preferred_username || '',
+        photo_url: payload.picture || '',
+        phone_number: payload.phone_number || '',
+        auth_date: payload.iat || Math.floor(Date.now() / 1000)
+      }
+    };
+  } catch (err) {
+    return { ok: false, error: 'Failed to communicate with Telegram OAuth: ' + err.message };
+  }
+}
+
 function startWebhookServer(onPaymentActivated) {
   const port = CFG.WEBHOOK_PORT || 3000;
 
@@ -179,18 +242,47 @@ function startWebhookServer(onPaymentActivated) {
       }));
     }
 
-    // Telegram Login Authentication: POST /api/auth/telegram
-    if (req.method === 'POST' && req.url === '/api/auth/telegram') {
+    // Telegram OpenID Connect Authorization Redirect: GET /api/auth/telegram/authorize
+    if (req.method === 'GET' && req.url.startsWith('/api/auth/telegram/authorize')) {
+      const u = new URL(req.url, 'http://localhost');
+      const redirectUri = u.searchParams.get('redirect_uri') || u.searchParams.get('redirectUri') || '';
+      const scope = u.searchParams.get('scope') || 'openid profile';
+      const clientId = CFG.TG_CLIENT_ID;
+
+      if (!clientId) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: 'Telegram Client ID is not configured' }));
+      }
+
+      const tgAuthUrl = `https://oauth.telegram.org/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}`;
+      res.writeHead(302, { Location: tgAuthUrl });
+      return res.end();
+    }
+
+    // Telegram Login Authentication: POST /api/auth/telegram or /api/auth/telegram/token
+    if (req.method === 'POST' && (req.url === '/api/auth/telegram' || req.url === '/api/auth/telegram/token')) {
       let bodyStr = '';
       req.on('data', chunk => {
         bodyStr += chunk.toString();
         if (bodyStr.length > 50000) req.connection.destroy();
       });
-      req.on('end', () => {
+      req.on('end', async () => {
         let payload = {};
         try { payload = JSON.parse(bodyStr); } catch (_) {}
 
-        const verification = verifyTelegramAuth(payload, CFG.TG_TOKEN);
+        let verification;
+        if (payload.code) {
+          // OpenID Connect code exchange using Client ID and Client Secret
+          verification = await exchangeTelegramCode(
+            payload.code,
+            payload.redirect_uri || payload.redirectUri,
+            payload.client_id || CFG.TG_CLIENT_ID,
+            payload.client_secret || CFG.TG_CLIENT_SECRET
+          );
+        } else {
+          verification = verifyTelegramAuth(payload, CFG.TG_TOKEN);
+        }
+
         if (!verification.ok) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
@@ -205,6 +297,7 @@ function startWebhookServer(onPaymentActivated) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
           success: true,
+          tokens: verification.tokens || undefined,
           user: {
             id: String(user.id),
             firstName: user.first_name || user.firstName || user.given_name || user.name || '',
@@ -597,4 +690,4 @@ function startWebhookServer(onPaymentActivated) {
   return server;
 }
 
-module.exports = { startWebhookServer, verifySignature, verifyTelegramAuth };
+module.exports = { startWebhookServer, verifySignature, verifyTelegramAuth, exchangeTelegramCode };
