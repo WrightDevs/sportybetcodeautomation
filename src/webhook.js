@@ -213,19 +213,23 @@ function startWebhookServer(onPaymentActivated) {
     if (req.method === 'GET' && req.url === '/api/debug/live') {
       (async () => {
         const results = {};
-        const endpoints = [
-          'factsCenter/liveEvents',
-          'factsCenter/pcLiveEvents',
-          'factsCenter/mobileLiveEvents',
-          'factsCenter/wapLiveEvents',
-          'factsCenter/h5LiveEvents',
-          'factsCenter/liveSchedule',
-          'factsCenter/inplayEvents',
-          'factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18&pageSize=5&pageNum=1',
-          'factsCenter/pcUpcomingEvents?sportId=sr:sport:137&marketId=1,18&pageSize=5&pageNum=1'
+        const candidates = [
+          'factsCenter/live',
+          'factsCenter/inplay',
+          'factsCenter/eventList',
+          'factsCenter/liveData',
+          'factsCenter/liveMatchList',
+          'factsCenter/liveEventList',
+          'factsCenter/realTimeEvents',
+          'factsCenter/liveScore',
+          'factsCenter/liveScheduleEvents',
+          'factsCenter/wapLiveSchedule',
+          'factsCenter/popularEvents',
+          'factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18,14&pageSize=10&pageNum=1',
+          'factsCenter/pcUpcomingEvents?sportId=sr:sport:137&marketId=1,18,14&pageSize=10&pageNum=1'
         ];
 
-        for (const ep of endpoints) {
+        for (const ep of candidates) {
           try {
             const url = `${API}/${ep}${ep.includes('?') ? '&' : '?'}_t=${Date.now()}`;
             const r = await fetch(url, { headers: HDR });
@@ -235,9 +239,7 @@ function startWebhookServer(onPaymentActivated) {
             results[ep.split('?')[0]] = {
               status: r.status,
               bizCode: j?.bizCode,
-              dataKeys: j?.data ? Object.keys(j.data) : null,
-              totalNum: j?.data?.totalNum ?? (Array.isArray(j?.data) ? j.data.length : null),
-              tournamentsCount: (j?.data?.tournaments || []).length,
+              totalNum: j?.data?.totalNum ?? (Array.isArray(j?.data) ? j.data.length : (j?.data?.tournaments?.length || 0)),
               preview: text.slice(0, 150)
             };
           } catch (e) {
