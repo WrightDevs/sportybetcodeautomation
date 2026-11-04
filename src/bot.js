@@ -17,6 +17,14 @@ const {
 } = require('./questpay');
 const { startWebhookServer } = require('./webhook');
 const { getUserStats, getGlobalStats, settlePendingSlips } = require('./tracker');
+const {
+  startSession: startQuestSpecial,
+  stopSession: stopQuestSpecial,
+  isActive: isQuestSpecialActive,
+  getStatus: getQuestSpecialStatus,
+  getDailyCount: getQuestSpecialDailyCount,
+  MAX_DAILY: QUEST_SPECIAL_MAX_DAILY
+} = require('./quest-special');
 
 const API = `https://api.telegram.org/bot${CFG.TG_TOKEN}`;
 const busy = new Set();
@@ -44,6 +52,8 @@ const sportsMenu = {
     { text: '🕹 eFootball', callback_data: 'efootball' },
     { text: '⚡ vFootball', callback_data: 'vfootball' }
   ], [
+    { text: '🎯 Quest Special (Live Signal)', callback_data: 'quest_special' }
+  ], [
     { text: '📊 My Win Rate', callback_data: 'my_stats' },
     { text: '🌐 Boom Proof', callback_data: 'global_stats' }
   ], [
@@ -65,10 +75,11 @@ function getPaywallMenu() {
 }
 
 const HELP = `<b>Welcome to SportyBet Daily Codes VIP!</b>\n\n`
-  + `Select a sport below to generate fresh, ranked booking codes:\n\n`
-  + `⚽ <b>Football</b> — real fixtures, full day\n`
+  + `Select an option below to generate fresh booking codes:\n\n`
+  + `⚽ <b>Football</b> — real fixtures, ~10 odds accumulators\n`
   + `🕹 <b>eFootball</b> — in-play, leader by 3+ after 40′\n`
-  + `⚡ <b>vFootball</b> — in-play & upcoming 3-min rounds\n\n`
+  + `⚡ <b>vFootball</b> — in-play & upcoming 3-min rounds\n`
+  + `🎯 <b>Quest Special</b> — live background sniper at 38′ (HT) & 80′ (Late)\n\n`
   + `<i>Booking codes are non-staking preparation slips.</i>`;
 
 function sendPaywall(chat) {
@@ -202,6 +213,103 @@ async function handleSport(chat, key) {
   } finally {
     busy.delete(chat);
   }
+}
+
+async function handleQuestSpecial(chat) {
+  if (!isSubscribed(chat)) {
+    return sendPaywall(chat);
+  }
+
+  if (isQuestSpecialActive(chat)) {
+    const status = getQuestSpecialStatus(chat);
+    return send(chat, `⏳ <b>Quest Special is already actively scanning!</b>\n\n`
+      + `• <b>Current Cycle:</b> Scan #${status.scans} (${status.runningFor}s elapsed)\n`
+      + `• <b>Target:</b> vFootball live games at 38′ (HT O/U) & 80′ (Late Match / Handicap)\n`
+      + `• <b>Today's Quota Used:</b> ${status.dailyUsed}/${status.maxDaily}\n\n`
+      + `The bot will message you the second a qualifying match is detected!`, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🛑 Cancel Scan', callback_data: 'stop_quest_special' }],
+          [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
+        ]
+      }
+    });
+  }
+
+  const dailyUsed = getQuestSpecialDailyCount(chat);
+  if (dailyUsed >= QUEST_SPECIAL_MAX_DAILY) {
+    return send(chat, `⚠️ <b>Quest Special Daily Quota Reached (${QUEST_SPECIAL_MAX_DAILY}/${QUEST_SPECIAL_MAX_DAILY})</b>\n\n`
+      + `You have utilized your maximum 20 Quest Special signals for today. Your daily quota resets at midnight!`, {
+      reply_markup: sportsMenu
+    });
+  }
+
+  await send(chat, `🎯 <b>Quest Special Activated!</b>\n\n`
+    + `📡 <b>Live Scanner:</b> Running in background\n`
+    + `🎮 <b>Target:</b> vFootball live matches (38′ HT & 80′ Late Lead)\n`
+    + `🎫 <b>Format:</b> Single-leg sniper slip\n`
+    + `📊 <b>Today's Quota:</b> ${dailyUsed + 1}/${QUEST_SPECIAL_MAX_DAILY}\n\n`
+    + `<i>Stand by… You will receive an instant notification here the moment a qualifying match appears!</i>`, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🛑 Cancel Scan', callback_data: 'stop_quest_special' }],
+        [{ text: '🔙 Menu', callback_data: 'menu' }]
+      ]
+    }
+  });
+
+  startQuestSpecial(chat, async (result, timedOut) => {
+    if (timedOut) {
+      return send(chat, `⏳ <b>Quest Special: Cycle Concluded</b>\n\n`
+        + `No live vFootball game reached qualifying criteria (38′ HT or 80′ Late Lead) during this 3-minute round.\n\n`
+        + `Tap below to scan the next upcoming round:`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🎯 Scan Next Round', callback_data: 'quest_special' }],
+            [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+          ]
+        }
+      });
+    }
+
+    if (result) {
+      let text = `🎯 <b>QUEST SPECIAL SIGNAL FOUND!</b> ⚡️\n\n`
+        + `⚽ <b>Match:</b> <b>${result.home}</b> vs <b>${result.away}</b>\n`
+        + `⏱ <b>Minute:</b> ${result.minute}′\n`
+        + `🔢 <b>Score:</b> ${result.homeScore} - ${result.awayScore}\n`
+        + `🏆 <b>League:</b> ${result.league || 'vFootball'}\n\n`
+        + `📌 <b>Pick:</b> <b>${result.analysis.description}</b>\n`
+        + `📈 <b>Odds:</b> <b>@${result.analysis.odds}</b>\n`
+        + `💡 <b>Reasoning:</b> <i>${result.analysis.reasoning}</i>\n\n`;
+
+      if (result.code) {
+        text += `🎫 <b>SportyBet Booking Code:</b>\n`
+          + `<code>${result.code}</code>\n`
+          + `🔗 ${result.url}\n\n`
+          + `<i>Single-leg slip generated and tracked in your Boom analytics!</i>`;
+      } else {
+        text += `⚠️ <i>Booking code generation was busy. You can place the bet directly using the match details above!</i>`;
+      }
+
+      return send(chat, text, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🎯 Scan Next Match', callback_data: 'quest_special' }],
+            [{ text: '📊 My Win Rate', callback_data: 'my_stats' }],
+            [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+          ]
+        }
+      });
+    }
+  });
+}
+
+function handleStopQuestSpecial(chat) {
+  const stopped = stopQuestSpecial(chat);
+  if (stopped) {
+    return send(chat, '🛑 <b>Quest Special scan cancelled.</b>', { reply_markup: sportsMenu });
+  }
+  return send(chat, 'ℹ️ No active Quest Special scan was running.', { reply_markup: sportsMenu });
 }
 
 async function handleUserStats(chat) {
@@ -401,6 +509,10 @@ async function poll() {
             await handleUserStats(chat);
           } else if (data === 'global_stats') {
             await handleGlobalStats(chat);
+          } else if (data === 'quest_special') {
+            await handleQuestSpecial(chat);
+          } else if (data === 'stop_quest_special') {
+            await handleStopQuestSpecial(chat);
           } else if (['football', 'efootball', 'vfootball'].includes(data)) {
             await handleSport(chat, data);
           }
@@ -483,6 +595,10 @@ async function poll() {
           sendPaywall(chat);
         } else if (['/football', '/efootball', '/vfootball'].includes(cmd)) {
           await handleSport(chat, cmd.slice(1));
+        } else if (cmd === '/questspecial' || cmd === '/special') {
+          await handleQuestSpecial(chat);
+        } else if (cmd === '/stopspecial') {
+          await handleStopQuestSpecial(chat);
         }
 
         // Admin management commands

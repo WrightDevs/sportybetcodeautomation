@@ -17,16 +17,21 @@ Official API documentation for the SportyBet Automation engine, Telegram bot, Qu
 2. [Code Generation APIs](#2-code-generation-apis)
    - `POST /api/generate`
    - `GET /api/sports`
-3. [Analytics & Boom Rate APIs](#3-analytics--boom-rate-apis)
+3. [Quest Special APIs (Live Sniper)](#3-quest-special-apis-live-sniper)
+   - `POST /api/quest-special/start`
+   - `GET /api/quest-special/status/:userId`
+   - `POST /api/quest-special/stop`
+   - `GET /api/quest-special/scan`
+4. [Analytics & Boom Rate APIs](#4-analytics--boom-rate-apis)
    - `GET /api/analytics/global`
    - `GET /api/analytics/user/:userId`
    - `GET /api/slips/latest`
-4. [Payment & QuestPay Checkout](#4-payment--questpay-checkout)
+5. [Payment & QuestPay Checkout](#5-payment--questpay-checkout)
    - `POST /api/payment/initialize` *(Web Dashboard Checkout)*
    - `GET /api/payment/verify/:reference` *(Web Verification)*
    - `POST /webhook/questpay` *(QuestPay IPN)*
    - `GET /ping`
-5. [Next.js / TypeScript Integration Client](#5-nextjs--typescript-integration-client)
+6. [Next.js / TypeScript Integration Client](#6-nextjs--typescript-integration-client)
 
 ---
 
@@ -246,6 +251,12 @@ Returns metadata for all available sports to populate UI tabs and buttons.
       "name": "vFootball",
       "icon": "⚡",
       "desc": "Virtual football rapid 3-minute rounds"
+    },
+    {
+      "id": "quest_special",
+      "name": "Quest Special",
+      "icon": "🎯",
+      "desc": "Live background sniper: vFootball at 38′ (HT O/U) & 80′ (Late Lead)"
     }
   ]
 }
@@ -253,7 +264,133 @@ Returns metadata for all available sports to populate UI tabs and buttons.
 
 ---
 
-## 2. Analytics & Boom Rate APIs
+## 3. Quest Special APIs (Live Sniper)
+
+**Quest Special** is a specialized background sniper engine exclusively targeting **vFootball live games**:
+- **38th-minute window (Half Time O/U):**
+  - If score is `0-0` at 38′: targets **Under 0.5 HT** (halftime whistle imminent).
+  - If score is `1-0+` at 38′: targets **Over 0.5 HT** (goals already scored).
+- **80th-minute window (Late Match / Handicap):**
+  - If a team leads by **2+ goals** (e.g. `0-2`): targets **Match Winner (1X2)** on the leader.
+  - If a team leads by **1 goal** (e.g. `1-2`):
+    - If the leader dominates possession/shots (or no stats available): targets **Match Winner (1X2)** on the leader.
+    - If the trailing team dominates possession and shots: applies **Handicap (trailing team +1.5 / +2.0)**.
+- **Delivery:** Generates a **single-leg booking code** with full breakdown, URL, and tracks it in Boom Rate analytics.
+- **Quota:** VIP members only, maximum **20 signals per day**. Runs for one match cycle (~3 minutes) and auto-stops.
+
+---
+
+### Start Background Session
+Starts background scanning for the user. When a game qualifies, the single-leg code is minted automatically.
+
+- **Endpoint:** `/api/quest-special/start`
+- **Method:** `POST`
+- **Headers:** `Content-Type: application/json`
+
+#### Request Body
+```json
+{
+  "userId": "6916043986"
+}
+```
+
+#### Success Response (`200 OK`)
+```json
+{
+  "success": true,
+  "userId": "6916043986",
+  "message": "🔍 Quest Special activated! Scanning vFootball live games…",
+  "dailyUsed": 1,
+  "maxDaily": 20
+}
+```
+
+#### VIP Required Response (`403 Forbidden`)
+```json
+{
+  "success": false,
+  "error": "VIP subscription required to activate Quest Special"
+}
+```
+
+---
+
+### Check Session Status / Result
+Poll every 3–5 seconds from the web dashboard while Quest Special is active:
+
+- **Endpoint:** `/api/quest-special/status/:userId`
+- **Method:** `GET`
+- **Example:** `/api/quest-special/status/6916043986`
+
+#### Response While Scanning (`200 OK`)
+```json
+{
+  "success": true,
+  "userId": "6916043986",
+  "active": true,
+  "scans": 3,
+  "runningFor": 24,
+  "dailyUsed": 1,
+  "maxDaily": 20,
+  "lastResult": null
+}
+```
+
+#### Response When Game Found (`200 OK`)
+```json
+{
+  "success": true,
+  "userId": "6916043986",
+  "active": false,
+  "dailyUsed": 1,
+  "maxDaily": 20,
+  "lastResult": {
+    "code": "BC9X2A",
+    "url": "https://www.sportybet.com/ng/?shareCode=BC9X2A",
+    "home": "Manchester City",
+    "away": "Liverpool",
+    "league": "vFootball Premier League",
+    "minute": 80,
+    "homeScore": 0,
+    "awayScore": 2,
+    "analysis": {
+      "window": "80min",
+      "type": "match_winner",
+      "description": "Away to Win (0-2 at 80')",
+      "odds": 1.12,
+      "reasoning": "Away leads 0-2 by 2 goals at 80'. Strong Match Winner."
+    },
+    "timestamp": 1741234567890
+  }
+}
+```
+
+---
+
+### Stop Background Session
+Cancels active scanning if the user navigates away or cancels:
+
+- **Endpoint:** `/api/quest-special/stop`
+- **Method:** `POST`
+- **Headers:** `Content-Type: application/json`
+
+```json
+{
+  "userId": "6916043986"
+}
+```
+
+---
+
+### Instant Live Scan (One-Off)
+Directly probes live in-play vFootball fixtures right now without starting a background poller:
+
+- **Endpoint:** `/api/quest-special/scan`
+- **Method:** `GET`
+
+---
+
+## 4. Analytics & Boom Rate APIs
 
 ### Platform-Wide Transparency & Proof
 Ideal for the **Landing Page**. Displays total slips generated, global boom rate (win rate %), breakdown by sport, and recent boomed slips.
@@ -491,6 +628,35 @@ export interface UserStatsResponse {
   };
 }
 
+export interface QuestSpecialStatusResponse {
+  success: boolean;
+  userId: string;
+  active: boolean;
+  scans: number;
+  runningFor: number;
+  dailyUsed: number;
+  maxDaily: number;
+  lastResult: {
+    code: string | null;
+    url: string | null;
+    home: string;
+    away: string;
+    league?: string;
+    minute: number;
+    homeScore: number;
+    awayScore: number;
+    analysis: {
+      window: string;
+      type: string;
+      description: string;
+      odds: number;
+      reasoning: string;
+    };
+    timestamp: number;
+  } | null;
+  error?: string;
+}
+
 export interface SubscriptionResponse {
   success: boolean;
   userId: string;
@@ -607,6 +773,46 @@ export async function getGlobalStats(): Promise<GlobalStatsResponse> {
  */
 export async function getUserStats(userId: string): Promise<UserStatsResponse> {
   const res = await fetch(`${API_BASE}/api/analytics/user/${encodeURIComponent(userId)}`, { cache: 'no-store' });
+  return res.json();
+}
+
+/**
+ * Start a Quest Special background scanning session
+ */
+export async function startQuestSpecial(userId: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  const res = await fetch(`${API_BASE}/api/quest-special/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId })
+  });
+  return res.json();
+}
+
+/**
+ * Poll Quest Special status and get live signal results
+ */
+export async function getQuestSpecialStatus(userId: string): Promise<QuestSpecialStatusResponse> {
+  const res = await fetch(`${API_BASE}/api/quest-special/status/${encodeURIComponent(userId)}`, { cache: 'no-store' });
+  return res.json();
+}
+
+/**
+ * Stop active Quest Special session
+ */
+export async function stopQuestSpecial(userId: string): Promise<{ success: boolean; stopped: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/quest-special/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId })
+  });
+  return res.json();
+}
+
+/**
+ * Direct instant probe of live vFootball games (one-off scan)
+ */
+export async function scanQuestSpecialLive(): Promise<{ success: boolean; found: boolean; signal?: any; message?: string }> {
+  const res = await fetch(`${API_BASE}/api/quest-special/scan`, { cache: 'no-store' });
   return res.json();
 }
 ```

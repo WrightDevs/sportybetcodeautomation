@@ -3,10 +3,18 @@ const http = require('http');
 const crypto = require('crypto');
 const { CFG } = require('./config');
 const { parseQuestPayWebhook, initializeQuestPayCheckout, verifyQuestPayCheckout } = require('./questpay');
-const { addSubscription, getSubscription } = require('./subs');
+const { addSubscription, getSubscription, isSubscribed } = require('./subs');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
 const { PRESETS } = require('./presets');
+const {
+  scanQuestSpecial,
+  startSession: startQuestSpecialSession,
+  stopSession: stopQuestSpecialSession,
+  getStatus: getQuestSpecialStatus,
+  getDailyCount: getQuestSpecialDailyCount,
+  MAX_DAILY: QUEST_SPECIAL_MAX_DAILY
+} = require('./quest-special');
 
 // In-memory cache & concurrency lock for web generation
 let isGenerating = false;
@@ -165,7 +173,8 @@ function startWebhookServer(onPaymentActivated) {
         sports: [
           { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures, ~10 odds accumulators' },
           { id: 'efootball', name: 'eFootball', icon: '🕹', desc: 'In-play matches with 3+ margin after 40′' },
-          { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' }
+          { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' },
+          { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live background sniper: vFootball at 38′ (HT O/U) & 80′ (Late Lead)' }
         ]
       }));
     }
@@ -315,6 +324,116 @@ function startWebhookServer(onPaymentActivated) {
           amount: result.amount
         }));
       })();
+      return;
+    }
+
+    // Quest Special: Instant Live Scan GET /api/quest-special/scan
+    if (req.method === 'GET' && req.url === '/api/quest-special/scan') {
+      (async () => {
+        try {
+          const signal = await scanQuestSpecial();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          if (!signal) {
+            return res.end(JSON.stringify({
+              success: true,
+              found: false,
+              message: 'No live vFootball game currently meets the 38′ HT or 80′ Late Lead criteria.'
+            }));
+          }
+          return res.end(JSON.stringify({
+            success: true,
+            found: true,
+            signal
+          }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+      })();
+      return;
+    }
+
+    // Quest Special: Start Background Session POST /api/quest-special/start
+    if (req.method === 'POST' && req.url === '/api/quest-special/start') {
+      let bodyStr = '';
+      req.on('data', chunk => {
+        bodyStr += chunk.toString();
+        if (bodyStr.length > 50000) req.connection.destroy();
+      });
+      req.on('end', () => {
+        let payload = {};
+        try { payload = JSON.parse(bodyStr); } catch (_) {}
+        const userId = String(payload.userId || payload.chatId || payload.telegramId || '').trim();
+
+        if (!userId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, error: 'userId is required' }));
+        }
+
+        if (!isSubscribed(userId)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: 'VIP subscription required to activate Quest Special'
+          }));
+        }
+
+        const started = startQuestSpecialSession(userId);
+        if (!started.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, error: started.error }));
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          userId,
+          message: started.message,
+          dailyUsed: getQuestSpecialDailyCount(userId),
+          maxDaily: QUEST_SPECIAL_MAX_DAILY
+        }));
+      });
+      return;
+    }
+
+    // Quest Special: Check Status GET /api/quest-special/status/:userId
+    if (req.method === 'GET' && req.url.startsWith('/api/quest-special/status/')) {
+      const userId = decodeURIComponent(req.url.slice('/api/quest-special/status/'.length).split('?')[0]);
+      const status = getQuestSpecialStatus(userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: true,
+        userId,
+        ...status
+      }));
+    }
+
+    // Quest Special: Stop Session POST /api/quest-special/stop
+    if (req.method === 'POST' && req.url === '/api/quest-special/stop') {
+      let bodyStr = '';
+      req.on('data', chunk => {
+        bodyStr += chunk.toString();
+        if (bodyStr.length > 50000) req.connection.destroy();
+      });
+      req.on('end', () => {
+        let payload = {};
+        try { payload = JSON.parse(bodyStr); } catch (_) {}
+        const userId = String(payload.userId || payload.chatId || payload.telegramId || '').trim();
+
+        if (!userId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, error: 'userId is required' }));
+        }
+
+        const stopped = stopQuestSpecialSession(userId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          userId,
+          stopped,
+          message: stopped ? 'Quest Special stopped successfully' : 'No active session was running'
+        }));
+      });
       return;
     }
 
