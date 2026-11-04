@@ -214,9 +214,10 @@ function startWebhookServer(onPaymentActivated) {
       (async () => {
         const results = {};
         const testUrls = {
-          inplay_raw: `${API}/factsCenter/inplayEvents?sportId=sr:sport:202120001&_t=${Date.now()}`,
-          inplay_efootball: `${API}/factsCenter/inplayEvents?sportId=sr:sport:137&_t=${Date.now()}`,
-          inplay_no_filter: `${API}/factsCenter/inplayEvents?_t=${Date.now()}`,
+          inplay_with_params: `${API}/factsCenter/inplayEvents?marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&_t=${Date.now()}`,
+          inplay_football: `${API}/factsCenter/inplayEvents?sportId=sr:sport:1&marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&_t=${Date.now()}`,
+          inplay_efootball: `${API}/factsCenter/inplayEvents?sportId=sr:sport:137&marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&_t=${Date.now()}`,
+          live_schedule: `${API}/factsCenter/liveSchedule?marketId=1&_t=${Date.now()}`,
           vfootball_upcoming: `${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&todayGames=false&timeline=1&_t=${Date.now()}`
         };
 
@@ -224,12 +225,19 @@ function startWebhookServer(onPaymentActivated) {
           const j = await get(url);
           const dataType = Array.isArray(j?.data) ? 'array' : typeof j?.data;
           const dataLength = Array.isArray(j?.data) ? j.data.length : (j?.data?.tournaments?.length || 0);
+          const firstEvent = j?.data?.tournaments?.[0]?.events?.[0] || (Array.isArray(j?.data) ? j.data[0] : null);
           results[key] = {
             bizCode: j?.bizCode,
-            message: j?.message,
+            totalNum: j?.data?.totalNum,
+            tournaments: (j?.data?.tournaments || []).length,
             dataType,
-            dataLength,
-            rawPreview: JSON.stringify(j || {}).slice(0, 300)
+            firstEvent: firstEvent ? {
+              id: firstEvent.eventId,
+              name: `${firstEvent.homeTeamName} vs ${firstEvent.awayTeamName}`,
+              clock: firstEvent.matchClock,
+              status: firstEvent.matchStatus,
+              score: `${firstEvent.homeScore ?? firstEvent.homeTeamScore ?? '?'}-${firstEvent.awayScore ?? firstEvent.awayTeamScore ?? '?'}`
+            } : null
           };
         }
 
