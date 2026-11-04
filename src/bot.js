@@ -204,7 +204,10 @@ async function handleSport(chat, key) {
   }
 }
 
-function handleUserStats(chat) {
+async function handleUserStats(chat) {
+  // Check SportyBet for finished matches right away so stats are fresh
+  try { await settlePendingSlips(); } catch (_) {}
+
   const stats = getUserStats(chat);
   let text = `📊 <b>Your Personal Boom Analytics</b>\n\n`
     + `• <b>Total Slips Generated:</b> ${stats.totalSlips}\n`
@@ -235,6 +238,7 @@ function handleUserStats(chat) {
   return send(chat, text, {
     reply_markup: {
       inline_keyboard: [
+        [{ text: '🔄 Refresh Results', callback_data: 'my_stats' }],
         [{ text: '🌐 Community Benchmark Proof', callback_data: 'global_stats' }],
         [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
       ]
@@ -242,7 +246,9 @@ function handleUserStats(chat) {
   });
 }
 
-function handleGlobalStats(chat) {
+async function handleGlobalStats(chat) {
+  try { await settlePendingSlips(); } catch (_) {}
+
   const stats = getGlobalStats();
   let text = `🌐 <b>Overall Platform Boom Rate</b>\n\n`
     + `• <b>Total Codes Minted:</b> ${stats.totalSlips}\n`
@@ -263,6 +269,7 @@ function handleGlobalStats(chat) {
   return send(chat, text, {
     reply_markup: {
       inline_keyboard: [
+        [{ text: '🔄 Refresh Results', callback_data: 'global_stats' }],
         [{ text: '📊 My Personal Stats', callback_data: 'my_stats' }],
         [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
       ]
@@ -391,9 +398,9 @@ async function poll() {
             const [, targetChat] = data.split(':');
             await handleAdminReject(chat, cb.message.message_id, targetChat);
           } else if (data === 'my_stats') {
-            handleUserStats(chat);
+            await handleUserStats(chat);
           } else if (data === 'global_stats') {
-            handleGlobalStats(chat);
+            await handleGlobalStats(chat);
           } else if (['football', 'efootball', 'vfootball'].includes(data)) {
             await handleSport(chat, data);
           }
@@ -469,9 +476,9 @@ async function poll() {
         } else if (cmd === '/status') {
           handleStatus(chat);
         } else if (cmd === '/stats' || cmd === '/my_stats') {
-          handleUserStats(chat);
+          await handleUserStats(chat);
         } else if (cmd === '/proof' || cmd === '/global_stats' || cmd === '/boom') {
-          handleGlobalStats(chat);
+          await handleGlobalStats(chat);
         } else if (cmd === '/subscribe' || cmd === '/pay') {
           sendPaywall(chat);
         } else if (['/football', '/efootball', '/vfootball'].includes(cmd)) {

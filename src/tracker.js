@@ -127,7 +127,7 @@ function evaluateLeg(leg, eventData) {
 }
 
 /**
- * Check pending slips and settle won/lost tickets
+ * Check pending slips and settle won/lost tickets using SportyBet's official shareCode verification
  */
 async function settlePendingSlips(onBoom = null) {
   const slips = loadSlips();
@@ -139,61 +139,80 @@ async function settlePendingSlips(onBoom = null) {
   let modified = false;
 
   for (const slip of pending) {
-    let allSettled = true;
-    let anyLost = false;
+    try {
+      const url = `${API}/orders/share/${encodeURIComponent(slip.shareCode)}`;
+      const res = await get(url);
 
-    for (const leg of slip.legs) {
-      if (leg.status === 'won') continue;
-      if (leg.status === 'lost') {
-        anyLost = true;
-        break;
-      }
+      // Handle expired/purged booking codes (e.g. old virtual football slips)
+      if (!res || !res.data) {
+        const msg = String(res?.message || res?.innerMsg || '');
+        const ageMs = Date.now() - new Date(slip.createdAt).getTime();
 
-      // If kickoff is more than 30 mins in the future, skip checking
-      if (leg.ko && leg.ko > Date.now() + 300000) {
-        allSettled = false;
+        // If the code expired on SportyBet (usually 15-20 mins after virtuals finish), mark it settled
+        if (msg.includes('not valid') || msg.includes('invalid') || ageMs > 25 * 60 * 1000) {
+          slip.status = 'lost';
+          slip.settledAt = new Date().toISOString();
+          lostCount++;
+          modified = true;
+        }
         continue;
       }
 
-      try {
-        const url = `${API}/factsCenter/eventDetail?eventId=${encodeURIComponent(leg.eventId)}`;
-        const res = await get(url);
-        const data = res?.data || res;
-        const result = evaluateLeg(leg, data);
+      const outcomes = res.data.outcomes || [];
+      if (!outcomes.length) continue;
 
-        if (result.settled) {
-          leg.score = result.score;
-          leg.status = result.won ? 'won' : 'lost';
-          modified = true;
-          if (!result.won) {
-            anyLost = true;
-            break;
-          }
-        } else {
-          allSettled = false;
+      let allEnded = true;
+      let allWon = true;
+      let anyLost = false;
+
+      for (const ev of outcomes) {
+        const isEnded = ev.matchStatus === 'Ended' || ev.status === 3 || ev.status === 2;
+        if (!isEnded) {
+          allEnded = false;
+          allWon = false;
+          continue;
         }
-      } catch (_) {
-        allSettled = false;
+
+        const market = ev.markets?.[0];
+        const outcome = market?.outcomes?.[0];
+        const isWinning = outcome?.isWinning;
+
+        // Find corresponding leg in our stored slip
+        const leg = slip.legs?.find(l => l.eventId === ev.eventId);
+        if (leg) {
+          leg.score = ev.setScore || null;
+        }
+
+        if (isWinning === 1) {
+          if (leg) leg.status = 'won';
+        } else {
+          anyLost = true;
+          allWon = false;
+          if (leg) leg.status = 'lost';
+        }
       }
-      await sleep(150);
+
+      if (anyLost) {
+        slip.status = 'lost';
+        slip.settledAt = new Date().toISOString();
+        lostCount++;
+        modified = true;
+      } else if (allEnded && allWon && outcomes.length > 0) {
+        slip.status = 'boomed';
+        slip.settledAt = new Date().toISOString();
+        boomedCount++;
+        modified = true;
+        console.log(`  🎉 SLIP BOOMED! Code ${slip.shareCode} @${slip.totalOdds} (user ${slip.userId})`);
+
+        if (typeof onBoom === 'function') {
+          try { await onBoom(slip); } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.error(`Error settling slip ${slip.shareCode}:`, e.message);
     }
 
-    if (anyLost) {
-      slip.status = 'lost';
-      slip.settledAt = new Date().toISOString();
-      lostCount++;
-      modified = true;
-    } else if (allSettled && slip.legs.length > 0 && slip.legs.every(l => l.status === 'won')) {
-      slip.status = 'boomed';
-      slip.settledAt = new Date().toISOString();
-      boomedCount++;
-      modified = true;
-      console.log(`  🎉 SLIP BOOMED! Code ${slip.shareCode} @${slip.totalOdds} (user ${slip.userId})`);
-
-      if (typeof onBoom === 'function') {
-        try { await onBoom(slip); } catch (_) {}
-      }
-    }
+    await sleep(200);
   }
 
   if (modified) saveSlips(slips);
