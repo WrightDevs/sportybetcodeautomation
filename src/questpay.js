@@ -1,87 +1,139 @@
 'use strict';
 const { CFG } = require('./config');
 
+const BASE_URL = (CFG.QUESTPAY_API_URL || 'https://payments-api.questlabs.cc/api').replace(/\/+$/, '');
+
 /**
- * Verify a QuestPay transaction reference
- * Supports both direct QuestPay API verification and fallback verification
+ * Initialize a hosted QuestPay v1 checkout session
+ * Endpoint: POST /v1/checkout/initialize
  */
-async function verifyQuestPay(reference) {
+async function initializeQuestPayCheckout(chatId, email = null) {
+  if (!CFG.QUESTPAY_API_KEY) {
+    return { ok: false, err: 'QuestPay API key (QUESTPAY_API_KEY) is not set in .env' };
+  }
+
+  const userEmail = email || `user_${chatId}@sportybetcodes.com`;
+  const reference = `VIP-${chatId}-${Date.now()}`;
+  const amount = Number(CFG.SUB_PRICE) || 1000;
+
+  try {
+    const r = await fetch(`${BASE_URL}/v1/checkout/initialize`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${CFG.QUESTPAY_API_KEY}`
+      },
+      body: JSON.stringify({
+        reference,
+        email: userEmail,
+        amount,
+        description: `SportyBet Codes VIP (${CFG.SUB_DAYS} Days)`,
+        metadata: {
+          chatId: String(chatId),
+          userId: String(chatId),
+          days: CFG.SUB_DAYS
+        }
+      })
+    });
+
+    const j = await r.json().catch(() => ({}));
+
+    if (j.success && j.data && j.data.checkout_url) {
+      return {
+        ok: true,
+        reference,
+        checkout_url: j.data.checkout_url,
+        amount: j.data.amount || amount,
+        data: j.data
+      };
+    }
+
+    const errMsg = j.message || j.error || 'Failed to initialize QuestPay checkout';
+    return { ok: false, err: errMsg, raw: j };
+  } catch (e) {
+    return { ok: false, err: e.message };
+  }
+}
+
+/**
+ * Verify a QuestPay v1 checkout session by reference
+ * Endpoint: GET /v1/checkout/verify/:reference
+ */
+async function verifyQuestPayCheckout(reference) {
   if (!reference) {
     return { ok: false, err: 'Reference is required' };
+  }
+  if (!CFG.QUESTPAY_API_KEY) {
+    return { ok: false, err: 'QuestPay API key is not configured in .env' };
   }
 
   const cleanRef = reference.trim();
 
-  // If QuestPay API key is provided, query the QuestPay API
-  if (CFG.QUESTPAY_API_KEY) {
-    const baseUrl = CFG.QUESTPAY_API_URL || 'https://api.questpay.ng/v1';
-    const urls = [
-      `${baseUrl}/transaction/verify/${encodeURIComponent(cleanRef)}`,
-      `${baseUrl}/payments/verify/${encodeURIComponent(cleanRef)}`,
-      `${baseUrl}/verify/${encodeURIComponent(cleanRef)}`
-    ];
-
-    for (const url of urls) {
-      try {
-        const r = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${CFG.QUESTPAY_API_KEY}`
-          }
-        });
-
-        if (r.status === 404) continue;
-
-        const j = await r.json().catch(() => ({}));
-        const data = j.data || j;
-        const status = String(data.status || j.status || '').toLowerCase();
-        const amount = Number(data.amount || j.amount || 0);
-
-        if (['success', 'successful', 'paid', 'completed'].includes(status)) {
-          // Extract chatId from metadata, customer, or reference
-          const chatId = data.metadata?.chatId || data.chatId || data.customer?.chatId || null;
-          return {
-            ok: true,
-            status: 'success',
-            chatId,
-            amount,
-            reference: cleanRef,
-            data
-          };
-        }
-        if (status) {
-          return { ok: false, status, err: `Transaction status is '${status}'` };
-        }
-      } catch (e) {
-        // try next endpoint URL
+  try {
+    const r = await fetch(`${BASE_URL}/v1/checkout/verify/${encodeURIComponent(cleanRef)}`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${CFG.QUESTPAY_API_KEY}`
       }
-    }
-  }
+    });
 
-  return { ok: false, err: 'Could not verify automatically via QuestPay API' };
+    const j = await r.json().catch(() => ({}));
+    const data = j.data || j;
+
+    const status = String(data.status || j.status || '').toLowerCase();
+    const isPaid = status === 'paid' || status === 'success' || status === 'completed';
+
+    if (isPaid) {
+      const chatId = data.metadata?.chatId || data.metadata?.userId || null;
+      const amount = data.transaction?.amount || data.amount || CFG.SUB_PRICE;
+      const days = Number(data.metadata?.days) || CFG.SUB_DAYS;
+
+      return {
+        ok: true,
+        status: 'paid',
+        reference: cleanRef,
+        chatId,
+        days,
+        amount,
+        paidAt: data.paid_at || data.transaction?.paid_at || Date.now(),
+        data
+      };
+    }
+
+    return {
+      ok: false,
+      status: status || 'unpaid',
+      err: j.message || `Checkout status is '${status || 'unpaid'}'`,
+      data
+    };
+  } catch (e) {
+    return { ok: false, err: e.message };
+  }
 }
 
 /**
  * Parse an incoming QuestPay webhook payload
+ * Event: payment.received
  */
 function parseQuestPayWebhook(body) {
   try {
     const data = typeof body === 'string' ? JSON.parse(body) : body;
     const payload = data.data || data;
 
-    const status = String(payload.status || data.status || data.event || '').toLowerCase();
-    const isSuccess = ['success', 'successful', 'paid', 'completed', 'charge.success', 'payment.success'].some(s => status.includes(s));
+    const event = String(data.event || payload.event || '').toLowerCase();
+    const status = String(payload.status || data.status || '').toLowerCase();
+
+    const isSuccess = event === 'payment.received' || status === 'paid' || status === 'success' || status === 'completed';
 
     if (!isSuccess) {
-      return { ok: false, status, err: 'Transaction not successful' };
+      return { ok: false, status, err: `Event '${event || status}' is not a completed payment` };
     }
 
-    const reference = payload.reference || payload.tx_ref || payload.transaction_ref || payload.id || null;
-    const amount = Number(payload.amount || data.amount || 0);
+    const reference = payload.reference || payload.tx_ref || payload.id || null;
+    const amount = Number(payload.transaction?.amount || payload.amount || data.amount || 0);
 
-    // Look for chatId in metadata or email (e.g. user_6916043986@...)
-    let chatId = payload.metadata?.chatId || data.metadata?.chatId || payload.chatId || null;
+    // Extract chatId from metadata or user email (user_12345@...)
+    let chatId = payload.metadata?.chatId || payload.metadata?.userId || null;
     if (!chatId) {
       const email = payload.customer?.email || payload.email || '';
       const m = /user_(\d+)@/.exec(email);
@@ -93,14 +145,16 @@ function parseQuestPayWebhook(body) {
       chatId,
       reference,
       amount,
+      days: Number(payload.metadata?.days) || CFG.SUB_DAYS,
       raw: data
     };
   } catch (e) {
-    return { ok: false, err: 'Invalid JSON payload: ' + e.message };
+    return { ok: false, err: 'Invalid JSON webhook payload: ' + e.message };
   }
 }
 
 module.exports = {
-  verifyQuestPay,
+  initializeQuestPayCheckout,
+  verifyQuestPayCheckout,
   parseQuestPayWebhook
 };
