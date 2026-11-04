@@ -213,32 +213,36 @@ function startWebhookServer(onPaymentActivated) {
     if (req.method === 'GET' && req.url === '/api/debug/live') {
       (async () => {
         const results = {};
-        const testUrls = {
-          inplay_with_params: `${API}/factsCenter/inplayEvents?marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&_t=${Date.now()}`,
-          inplay_football: `${API}/factsCenter/inplayEvents?sportId=sr:sport:1&marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&_t=${Date.now()}`,
-          inplay_efootball: `${API}/factsCenter/inplayEvents?sportId=sr:sport:137&marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&_t=${Date.now()}`,
-          live_schedule: `${API}/factsCenter/liveSchedule?marketId=1&_t=${Date.now()}`,
-          vfootball_upcoming: `${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18&pageSize=20&pageNum=1&option=1&order=0&todayGames=false&timeline=1&_t=${Date.now()}`
-        };
+        const endpoints = [
+          'factsCenter/liveEvents',
+          'factsCenter/pcLiveEvents',
+          'factsCenter/mobileLiveEvents',
+          'factsCenter/wapLiveEvents',
+          'factsCenter/h5LiveEvents',
+          'factsCenter/liveSchedule',
+          'factsCenter/inplayEvents',
+          'factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18&pageSize=5&pageNum=1',
+          'factsCenter/pcUpcomingEvents?sportId=sr:sport:137&marketId=1,18&pageSize=5&pageNum=1'
+        ];
 
-        for (const [key, url] of Object.entries(testUrls)) {
-          const j = await get(url);
-          const dataType = Array.isArray(j?.data) ? 'array' : typeof j?.data;
-          const dataLength = Array.isArray(j?.data) ? j.data.length : (j?.data?.tournaments?.length || 0);
-          const firstEvent = j?.data?.tournaments?.[0]?.events?.[0] || (Array.isArray(j?.data) ? j.data[0] : null);
-          results[key] = {
-            bizCode: j?.bizCode,
-            totalNum: j?.data?.totalNum,
-            tournaments: (j?.data?.tournaments || []).length,
-            dataType,
-            firstEvent: firstEvent ? {
-              id: firstEvent.eventId,
-              name: `${firstEvent.homeTeamName} vs ${firstEvent.awayTeamName}`,
-              clock: firstEvent.matchClock,
-              status: firstEvent.matchStatus,
-              score: `${firstEvent.homeScore ?? firstEvent.homeTeamScore ?? '?'}-${firstEvent.awayScore ?? firstEvent.awayTeamScore ?? '?'}`
-            } : null
-          };
+        for (const ep of endpoints) {
+          try {
+            const url = `${API}/${ep}${ep.includes('?') ? '&' : '?'}_t=${Date.now()}`;
+            const r = await fetch(url, { headers: HDR });
+            const text = await r.text();
+            let j = null;
+            try { j = JSON.parse(text); } catch (_) {}
+            results[ep.split('?')[0]] = {
+              status: r.status,
+              bizCode: j?.bizCode,
+              dataKeys: j?.data ? Object.keys(j.data) : null,
+              totalNum: j?.data?.totalNum ?? (Array.isArray(j?.data) ? j.data.length : null),
+              tournamentsCount: (j?.data?.tournaments || []).length,
+              preview: text.slice(0, 150)
+            };
+          } catch (e) {
+            results[ep.split('?')[0]] = { err: e.message };
+          }
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
