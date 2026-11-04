@@ -21,5 +21,8 @@
     "bot": "node bin/bot.js",
     "test-leg": "node bin/sb.js --test",
     "ping": "node bin/sb.js --ping"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
   }
 }

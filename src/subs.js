@@ -1,28 +1,6 @@
 'use strict';
-const fs = require('fs');
-const path = require('path');
-const { CFG, ROOT } = require('./config');
-
-const DB_FILE = path.join(ROOT, 'subscribers.json');
-
-function loadDB() {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    }
-  } catch (e) {
-    console.error('Failed to load subscribers.json:', e.message);
-  }
-  return {};
-}
-
-function saveDB(db) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Failed to save subscribers.json:', e.message);
-  }
-}
+const { CFG } = require('./config');
+const { getSubscriber, saveSubscriber, removeSubscriber, subCache } = require('./db');
 
 function isAdmin(chatId) {
   if (!CFG.ADMIN_ID) return false;
@@ -31,8 +9,8 @@ function isAdmin(chatId) {
 
 function isSubscribed(chatId) {
   if (isAdmin(chatId)) return true;
-  const db = loadDB();
-  const sub = db[String(chatId)];
+  const id = String(chatId);
+  const sub = subCache.get(id);
   if (!sub || !sub.expiresAt) return false;
   return Number(sub.expiresAt) > Date.now();
 }
@@ -41,8 +19,8 @@ function getSubscription(chatId) {
   if (isAdmin(chatId)) {
     return { active: true, isAdmin: true, expiresAt: Infinity, daysLeft: 'Lifetime (Admin)' };
   }
-  const db = loadDB();
-  const sub = db[String(chatId)];
+  const id = String(chatId);
+  const sub = subCache.get(id);
   if (!sub || !sub.expiresAt) {
     return { active: false, daysLeft: 0 };
   }
@@ -58,43 +36,42 @@ function getSubscription(chatId) {
 }
 
 function addSubscription(chatId, days = 7, meta = {}) {
-  const db = loadDB();
   const id = String(chatId);
-  const currentExp = (db[id] && Number(db[id].expiresAt) > Date.now()) ? Number(db[id].expiresAt) : Date.now();
+  const existing = subCache.get(id);
+  const currentExp = (existing && Number(existing.expiresAt) > Date.now()) ? Number(existing.expiresAt) : Date.now();
   const newExp = currentExp + (Number(days) * 24 * 3600 * 1000);
 
-  db[id] = {
+  // Saves to in-memory cache, local JSON, and PostgreSQL/Supabase if configured
+  saveSubscriber(id, newExp, meta);
+
+  return {
     chatId: id,
     expiresAt: newExp,
     updatedAt: Date.now(),
     ...meta
   };
-  saveDB(db);
-  return db[id];
 }
 
 function revokeSubscription(chatId) {
-  const db = loadDB();
   const id = String(chatId);
-  if (db[id]) {
-    delete db[id];
-    saveDB(db);
-    return true;
-  }
-  return false;
+  removeSubscriber(id);
+  return true;
 }
 
 function listSubscribers() {
-  const db = loadDB();
   const now = Date.now();
-  return Object.values(db)
-    .filter(s => Number(s.expiresAt) > now)
-    .map(s => ({
-      chatId: s.chatId,
-      daysLeft: Math.ceil((Number(s.expiresAt) - now) / (24 * 3600 * 1000)),
-      expDate: new Date(Number(s.expiresAt)).toLocaleDateString('en-GB', { timeZone: 'Africa/Lagos' }),
-      name: s.name || 'Anonymous'
-    }));
+  const list = [];
+  for (const s of subCache.values()) {
+    if (Number(s.expiresAt) > now) {
+      list.push({
+        chatId: s.chatId,
+        daysLeft: Math.ceil((Number(s.expiresAt) - now) / (24 * 3600 * 1000)),
+        expDate: new Date(Number(s.expiresAt)).toLocaleDateString('en-GB', { timeZone: 'Africa/Lagos' }),
+        name: s.name || s.username || 'Anonymous'
+      });
+    }
+  }
+  return list;
 }
 
 module.exports = {
@@ -105,4 +82,3 @@ module.exports = {
   revokeSubscription,
   listSubscribers
 };
-
