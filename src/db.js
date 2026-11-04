@@ -1,7 +1,13 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns');
 const { CFG, ROOT } = require('./config');
+
+// Ensure reliable SRV DNS resolution across all networks/ISPs
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch (_) {}
 
 const DB_FILE = path.join(ROOT, 'subscribers.json');
 const DATA_DIR = path.join(ROOT, 'data');
@@ -36,15 +42,15 @@ if (MONGO_URI) {
   try {
     const { MongoClient } = require('mongodb');
     mongoClient = new MongoClient(MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000
+      serverSelectionTimeoutMS: 8000,
+      connectTimeoutMS: 8000
     });
 
     (async () => {
       try {
         await mongoClient.connect();
-        const dbName = process.env.MONGO_DB_NAME || 'sportybet';
-        mongoDb = mongoClient.db(dbName);
+        mongoDb = process.env.MONGO_DB_NAME ? mongoClient.db(process.env.MONGO_DB_NAME) : mongoClient.db();
+        const dbName = mongoDb.databaseName || 'sportybet';
         subscribersCol = mongoDb.collection('subscribers');
         slipsCol = mongoDb.collection('slips');
 
@@ -65,6 +71,16 @@ if (MONGO_URI) {
             updatedAt: Number(doc.updatedAt),
             ...doc.meta
           });
+        }
+
+        // Auto-migrate any local subscribers into MongoDB
+        const localSubs = loadLocalSubscribers();
+        for (const [chatId, data] of Object.entries(localSubs)) {
+          await subscribersCol.updateOne(
+            { chatId: String(chatId) },
+            { $set: { chatId: String(chatId), expiresAt: data.expiresAt, updatedAt: data.updatedAt || Date.now(), meta: data } },
+            { upsert: true }
+          ).catch(() => {});
         }
       } catch (err) {
         console.error('MongoDB connection error, falling back to local storage:', err.message);
