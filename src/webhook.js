@@ -7,6 +7,7 @@ const { addSubscription, getSubscription, isSubscribed } = require('./subs');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
 const { PRESETS } = require('./presets');
+const { API, get } = require('./api');
 const {
   scanQuestSpecial,
   startSession: startQuestSpecialSession,
@@ -206,6 +207,40 @@ function startWebhookServer(onPaymentActivated) {
     if (req.method === 'GET' && (req.url === '/' || req.url === '/ping' || req.url === '/health')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ status: 'ok', service: 'questpay-webhook-v1', port }));
+    }
+
+    // Diagnostic endpoint: GET /api/debug/live
+    if (req.method === 'GET' && req.url === '/api/debug/live') {
+      (async () => {
+        const results = {};
+        const testUrls = {
+          vfootball_inplay: `${API}/factsCenter/inplayEvents?sportId=sr:sport:202120001&pageSize=20&pageNum=1`,
+          efootball_inplay: `${API}/factsCenter/inplayEvents?sportId=sr:sport:137&pageSize=20&pageNum=1`,
+          all_inplay: `${API}/factsCenter/inplayEvents?pageSize=20&pageNum=1`,
+          vfootball_upcoming: `${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&pageSize=20&pageNum=1`
+        };
+
+        for (const [key, url] of Object.entries(testUrls)) {
+          const j = await get(url);
+          const evs = j?.data?.tournaments?.flatMap(t => (t.events || []).map(e => ({
+            id: e.eventId,
+            name: `${e.homeTeamName} vs ${e.awayTeamName}`,
+            clock: e.matchClock,
+            minute: e.minute,
+            status: e.matchStatus,
+            score: `${e.homeScore ?? e.homeTeamScore ?? '?'}-${e.awayScore ?? e.awayTeamScore ?? '?'}`
+          }))) || [];
+          results[key] = {
+            total: evs.length,
+            tournaments: (j?.data?.tournaments || []).length,
+            samples: evs.slice(0, 3)
+          };
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, results }, null, 2));
+      })();
+      return;
     }
 
     // Analytics API for Next.js Landing Page: GET /api/analytics/global
