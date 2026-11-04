@@ -276,17 +276,72 @@ Returns metadata for all available sports to populate UI tabs and buttons.
 
 ## 3. Quest Special APIs (Live Sniper)
 
-**Quest Special** is a specialized background sniper engine exclusively targeting **vFootball live games**:
-- **38th-minute window (Half Time O/U):**
-  - If score is `0-0` at 38′: targets **Under 0.5 HT** (halftime whistle imminent).
-  - If score is `1-0+` at 38′: targets **Over 0.5 HT** (goals already scored).
-- **80th-minute window (Late Match / Handicap):**
-  - If a team leads by **2+ goals** (e.g. `0-2`): targets **Match Winner (1X2)** on the leader.
-  - If a team leads by **1 goal** (e.g. `1-2`):
-    - If the leader dominates possession/shots (or no stats available): targets **Match Winner (1X2)** on the leader.
-    - If the trailing team dominates possession and shots: applies **Handicap (trailing team +1.5 / +2.0)**.
-- **Delivery:** Generates a **single-leg booking code** with full breakdown, URL, and tracks it in Boom Rate analytics.
-- **Quota:** VIP members only, maximum **20 signals per day**. Runs for one match cycle (~3 minutes) and auto-stops.
+### Overview & Philosophy
+**Quest Special** is a specialized real-time in-play sniper engine built exclusively for **vFootball (Virtual Football)** live matches (`sr:sport:202120001`). 
+
+Unlike multi-leg accumulators, Quest Special mints **single-leg (1-leg)** high-confidence booking codes. Virtual football matches run on a compressed 3-minute cycle (90 virtual minutes simulated in ~180 real seconds). At specific inflection points—the 38th-minute approach to halftime and the 80th-minute endgame—market shapes offer temporary high-probability opportunities.
+
+Quest Special continuously scans live vFootball rounds in the background, identifies qualifying fixtures, immediately mints a single-leg SportyBet booking code, and delivers it to the user.
+
+---
+
+### Comprehensive Rules & Decision Logic
+
+```
+                           [ Live vFootball Match Detected ]
+                                          │
+                   ┌──────────────────────┴──────────────────────┐
+                   │                                             │
+          At 38 Minutes (35′ - 42′)                     At 80 Minutes (76′ - 85′)
+           Half-Time O/U Window                           Late Match & Handicap
+                   │                                             │
+         ┌─────────┴─────────┐                         ┌─────────┴─────────┐
+         │                   │                         │                   │
+    Score is 0-0       Score is 1-0+             Lead is 2+ Goals     Lead is 1 Goal
+         │                   │                    (e.g. 0-2, 3-0)     (e.g. 1-2, 2-1)
+         ▼                   ▼                         │                   │
+    [ Under 0.5 HT ]    [ Over 0.5 HT ]                ▼                   ▼
+    Whistle imminent,   Goals already locked,    [ Match Winner 1X2 ]   Check live stats:
+    no time left.       near-guaranteed hit.     Deficit insurmountable Possession & Shots
+                                                 in virtual time.          │
+                                                               ┌───────────┴───────────┐
+                                                               │                       │
+                                                      Leader Dominates      Trailer Dominates
+                                                      (or no live stats)    Possession & Shots
+                                                               │                       │
+                                                               ▼                       ▼
+                                                      [ Match Winner 1X2 ]    [ Trailer Handicap ]
+                                                      Leader holds lead.      Trailer +1.5 / +2.0
+                                                                              goals cushion.
+```
+
+#### Rule 1: The 38th-Minute Half-Time Window (35′ to 42′)
+Virtual matches reach halftime at 45′ (approximately 90 seconds into the real match). Between 35′ and 42′, only 3 to 7 virtual minutes remain before the referee blows the halftime whistle:
+- **Case 1A — Score is `0-0`:**
+  - **Selection:** `Under 0.5 1st Half` (Market `68` or `18`).
+  - **Reasoning:** In virtual football, the closing moments of the first half have minimal attacking actions. A `0-0` scoreline at 38′ has an overwhelming probability of staying scoreless into the break.
+- **Case 1B — Score is `1-0`, `0-1`, `1-1` or higher:**
+  - **Selection:** `Over 0.5 1st Half` (Market `68` or `18`).
+  - **Reasoning:** Because at least one goal has already been scored, `Over 0.5 HT` is already mathematically won. If the market remains open on SportyBet, it represents a guaranteed winning leg.
+
+#### Rule 2: The 80th-Minute Endgame Window (76′ to 85′)
+With only 10 virtual minutes (less than 20 real seconds) remaining, late game dynamics are evaluated:
+- **Case 2A — Winning team is 2 or more goals ahead (e.g. `0-2`, `3-1`, `0-3`):**
+  - **Selection:** `Match Winner (1X2)` on the leading team.
+  - **Reasoning:** Scoring 2 goals in 20 real seconds against SportyBet's virtual simulation engine is statistically near-impossible. The leading team is heavily favored to close out the win.
+- **Case 2B — Winning team leads by exactly 1 goal (e.g. `1-2`, `1-0`):**
+  - The engine inspects live match statistics (Possession % and Shots on Target):
+    - **Branch 1 (Leader Dominates or Neutral):** If the leading team controls possession and shots (or if virtual stats are not broadcast), the engine selects **Match Winner (1X2)** on the leading team.
+    - **Branch 2 (Trailer Dominates):** If the trailing team has higher possession and more shots on target, they have attacking momentum. Instead of risking a draw, the engine selects **Handicap on the Trailing Team (+1.5 or +2.0 goals)** (Market `14`). Even if the trailing team loses by 1 goal or draws, the handicap bet wins.
+
+---
+
+### Operational Constraints & Lifecycle
+- **Scan Interval:** Polls SportyBet factsCenter every **8 seconds**.
+- **Execution Lifespan:** Runs for **one match round** (~3 to 4 minutes). If no match qualifies within this window, the session concludes automatically to avoid battery and network drain.
+- **Daily Quota:** Limited to **20 activations per user per calendar day** (resets at 00:00 UTC).
+- **VIP Protection:** Only available to users with active VIP subscriptions. Free/expired users receive `403 Forbidden`.
+- **Boom Tracking:** Every generated slip is recorded in MongoDB with `isQuestSpecial: true` and automatically settled when the match finishes for personal win rate analytics.
 
 ---
 
@@ -338,6 +393,189 @@ Poll every 3–5 seconds from the web dashboard while Quest Special is active:
   "success": true,
   "userId": "6916043986",
   "active": true,
+  "scans": 3,
+  "runningFor": 24,
+  "dailyUsed": 1,
+  "maxDaily": 20,
+  "lastResult": null
+}
+```
+
+#### Response When Game Found (`200 OK`)
+```json
+{
+  "success": true,
+  "userId": "6916043986",
+  "active": false,
+  "dailyUsed": 1,
+  "maxDaily": 20,
+  "lastResult": {
+    "code": "BC9X2A",
+    "url": "https://www.sportybet.com/ng/?shareCode=BC9X2A",
+    "home": "Manchester City",
+    "away": "Liverpool",
+    "league": "vFootball Premier League",
+    "minute": 80,
+    "homeScore": 0,
+    "awayScore": 2,
+    "analysis": {
+      "window": "80min",
+      "type": "match_winner",
+      "description": "Away to Win (0-2 at 80')",
+      "odds": 1.12,
+      "reasoning": "Away leads 0-2 by 2 goals at 80'. Strong Match Winner."
+    },
+    "timestamp": 1741234567890
+  }
+}
+```
+
+#### Response When Cycle Ends With No Match (`200 OK`)
+```json
+{
+  "success": true,
+  "userId": "6916043986",
+  "active": false,
+  "dailyUsed": 0,
+  "maxDaily": 20,
+  "lastResult": {
+    "timedOut": true,
+    "timestamp": 1741234747000
+  }
+}
+```
+
+---
+
+### Stop Background Session
+Cancels active scanning if the user navigates away or clicks Cancel:
+
+- **Endpoint:** `/api/quest-special/stop`
+- **Method:** `POST`
+- **Headers:** `Content-Type: application/json`
+
+```json
+{
+  "userId": "6916043986"
+}
+```
+
+---
+
+### Instant Live Scan (One-Off)
+Directly probes live in-play vFootball fixtures right now without starting a background poller:
+
+- **Endpoint:** `/api/quest-special/scan`
+- **Method:** `GET`
+
+---
+
+### Web Dashboard Implementation Example (React / Next.js)
+
+```tsx
+'use client';
+import { useState, useEffect } from 'react';
+import { startQuestSpecial, getQuestSpecialStatus, stopQuestSpecial } from '@/lib/sportyApi';
+
+export function QuestSpecialWidget({ userId }: { userId: string }) {
+  const [active, setActive] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [statusText, setStatusText] = useState('Idle');
+  const [result, setResult] = useState<any>(null);
+
+  const handleStart = async () => {
+    setLoading(true);
+    setResult(null);
+    const res = await startQuestSpecial(userId);
+    setLoading(false);
+    if (res.success) {
+      setActive(true);
+      setStatusText('Scanning live vFootball round…');
+    } else {
+      alert(res.error || 'Failed to activate Quest Special');
+    }
+  };
+
+  const handleStop = async () => {
+    await stopQuestSpecial(userId);
+    setActive(false);
+    setStatusText('Cancelled');
+  };
+
+  // Poll status while active
+  useEffect(() => {
+    if (!active) return;
+    const interval = setInterval(async () => {
+      const data = await getQuestSpecialStatus(userId);
+      if (data.lastResult) {
+        if (data.lastResult.timedOut) {
+          setStatusText('Round ended with no qualifying games. Tap to scan next round!');
+        } else {
+          setResult(data.lastResult);
+          setStatusText('🎯 Qualifying signal found!');
+        }
+        setActive(false);
+      }
+    }, 3500);
+
+    return () => clearInterval(interval);
+  }, [active, userId]);
+
+  return (
+    <div className="p-6 bg-gray-900 border border-yellow-500/30 rounded-xl text-white">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xl font-bold flex items-center gap-2">🎯 Quest Special (Live Sniper)</h3>
+        <span className="text-xs bg-yellow-500/20 text-yellow-300 px-2 py-1 rounded">VIP Exclusive</span>
+      </div>
+
+      <p className="text-sm text-gray-300 mb-4">
+        Background sniper targeting vFootball matches at 38′ (HT O/U) and 80′ (Late Match / Handicap). Mints a single-leg code the second criteria are met.
+      </p>
+
+      {result && (
+        <div className="p-4 bg-green-950/60 border border-green-500 rounded-lg mb-4">
+          <div className="flex justify-between items-center mb-2">
+            <span className="font-bold text-green-400">🟢 SIGNAL DETECTED</span>
+            <span className="text-sm bg-green-800 px-2 py-0.5 rounded">@{result.analysis.odds}</span>
+          </div>
+          <p className="font-semibold">{result.home} vs {result.away} ({result.minute}′ — {result.homeScore}:{result.awayScore})</p>
+          <p className="text-sm text-yellow-300 mt-1">Pick: {result.analysis.description}</p>
+          <p className="text-xs text-gray-400 mt-1 italic">{result.analysis.reasoning}</p>
+
+          {result.code && (
+            <div className="mt-3 flex items-center justify-between bg-black/40 p-2 rounded">
+              <span className="font-mono text-lg font-bold text-yellow-400">{result.code}</span>
+              <a href={result.url} target="_blank" rel="noreferrer" className="text-xs bg-red-600 hover:bg-red-700 px-3 py-1.5 rounded font-bold">
+                Open in SportyBet ↗
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        {!active ? (
+          <button
+            onClick={handleStart}
+            disabled={loading}
+            className="px-5 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-black font-bold rounded-lg transition"
+          >
+            {loading ? 'Activating…' : '🎯 Activate Quest Special'}
+          </button>
+        ) : (
+          <button
+            onClick={handleStop}
+            className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg transition"
+          >
+            🛑 Stop Scanning
+          </button>
+        )}
+        <span className="text-sm text-gray-400">{statusText}</span>
+      </div>
+    </div>
+  );
+}
+```
   "scans": 3,
   "runningFor": 24,
   "dailyUsed": 1,
