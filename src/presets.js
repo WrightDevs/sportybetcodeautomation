@@ -2,6 +2,7 @@
 
 const PRESETS = {
   football: {
+    key: 'football',
     label: 'Football', icon: '⚽',
     sports: ['sr:sport:1'],
     mode: 'upcoming', windowMin: 0,
@@ -10,6 +11,7 @@ const PRESETS = {
     llm: true, leagueCap: 6, virtual: false
   },
   efootball: {
+    key: 'efootball',
     label: 'eFootball', icon: '🕹',
     sports: ['sr:sport:137'],
     mode: 'live',
@@ -20,6 +22,7 @@ const PRESETS = {
     fallbackUpcoming: { windowMin: 20 }
   },
   vfootball: {
+    key: 'vfootball',
     label: 'vFootball', icon: '⚡',
     sports: ['sr:sport:202120001'],
     mode: 'live',

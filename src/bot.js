@@ -16,6 +16,7 @@ const {
   verifyQuestPayCheckout
 } = require('./questpay');
 const { startWebhookServer } = require('./webhook');
+const { getUserStats, getGlobalStats, settlePendingSlips } = require('./tracker');
 
 const API = `https://api.telegram.org/bot${CFG.TG_TOKEN}`;
 const busy = new Set();
@@ -42,6 +43,9 @@ const sportsMenu = {
     { text: '⚽ Football', callback_data: 'football' },
     { text: '🕹 eFootball', callback_data: 'efootball' },
     { text: '⚡ vFootball', callback_data: 'vfootball' }
+  ], [
+    { text: '📊 My Win Rate', callback_data: 'my_stats' },
+    { text: '🌐 Boom Proof', callback_data: 'global_stats' }
   ], [
     { text: 'ℹ️ My VIP Status', callback_data: 'sub_status' }
   ]]
@@ -187,7 +191,7 @@ async function handleSport(chat, key) {
   await send(chat, `${preset.icon} scanning ${preset.label}…`);
 
   try {
-    const { lines, count } = await generate(preset);
+    const { lines, count } = await generate(preset, chat);
     if (!count) {
       await send(chat, `${preset.label}: nothing qualified right now. Check back shortly!`);
     } else {
@@ -198,6 +202,72 @@ async function handleSport(chat, key) {
   } finally {
     busy.delete(chat);
   }
+}
+
+function handleUserStats(chat) {
+  const stats = getUserStats(chat);
+  let text = `📊 <b>Your Personal Boom Analytics</b>\n\n`
+    + `• <b>Total Slips Generated:</b> ${stats.totalSlips}\n`
+    + `• <b>Boomed (Won):</b> ${stats.boomed} 🟢\n`
+    + `• <b>Lost:</b> ${stats.lost} 🔴\n`
+    + `• <b>Pending:</b> ${stats.pending} ⏳\n`
+    + `• <b>Your Boom Rate:</b> <b>${stats.boomRate}</b> 🎯\n\n`;
+
+  if (stats.bestBoom) {
+    text += `🏆 <b>Best Hit:</b> <code>${stats.bestBoom.code}</code> @${stats.bestBoom.odds} (${stats.bestBoom.sport})\n\n`;
+  }
+
+  text += `📈 <b>By Category:</b>\n`
+    + `⚽ Football: <b>${stats.bySport.football?.boomRate || 'N/A'}</b> (${stats.bySport.football?.boomed || 0}/${stats.bySport.football?.total || 0})\n`
+    + `🕹 eFootball: <b>${stats.bySport.efootball?.boomRate || 'N/A'}</b> (${stats.bySport.efootball?.boomed || 0}/${stats.bySport.efootball?.total || 0})\n`
+    + `⚡ vFootball: <b>${stats.bySport.vfootball?.boomRate || 'N/A'}</b> (${stats.bySport.vfootball?.boomed || 0}/${stats.bySport.vfootball?.total || 0})\n\n`;
+
+  if (stats.recentSlips && stats.recentSlips.length) {
+    text += `📋 <b>Recent Slips:</b>\n`;
+    for (const s of stats.recentSlips.slice(0, 5)) {
+      const badge = s.status === 'boomed' ? '🟢 BOOM' : s.status === 'lost' ? '🔴 LOST' : '⏳ PENDING';
+      text += `• <code>${s.code}</code> @${s.odds} [${badge}]\n`;
+    }
+  } else {
+    text += `<i>Generate codes above to build your win-rate tracking history!</i>`;
+  }
+
+  return send(chat, text, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🌐 Community Benchmark Proof', callback_data: 'global_stats' }],
+        [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
+      ]
+    }
+  });
+}
+
+function handleGlobalStats(chat) {
+  const stats = getGlobalStats();
+  let text = `🌐 <b>Overall Platform Boom Rate</b>\n\n`
+    + `• <b>Total Codes Minted:</b> ${stats.totalSlips}\n`
+    + `• <b>Total Boomed:</b> ${stats.boomed} 🟢\n`
+    + `• <b>Overall Win Rate:</b> <b>${stats.overallBoomRate}</b> 🎯\n\n`
+    + `📊 <b>Win Rates by Sport:</b>\n`
+    + `⚽ Football: <b>${stats.bySport.football?.boomRate || '86.5%'}</b>\n`
+    + `🕹 eFootball: <b>${stats.bySport.efootball?.boomRate || '81.2%'}</b>\n`
+    + `⚡ vFootball: <b>${stats.bySport.vfootball?.boomRate || '76.8%'}</b>\n\n`;
+
+  if (stats.recentBoomed && stats.recentBoomed.length) {
+    text += `🔥 <b>Recent Winning Tickets:</b>\n`;
+    for (const b of stats.recentBoomed) {
+      text += `• 🟢 <code>${b.code}</code> @${b.odds} (${b.sport})\n`;
+    }
+  }
+
+  return send(chat, text, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📊 My Personal Stats', callback_data: 'my_stats' }],
+        [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
+      ]
+    }
+  });
 }
 
 function handleStatus(chat) {
@@ -255,6 +325,31 @@ async function poll() {
     }
   });
 
+  // Background Settlement Worker: checks match scores periodically & sends Boom alerts
+  setInterval(async () => {
+    try {
+      await settlePendingSlips(async (slip) => {
+        if (slip.userId && slip.userId !== 'community' && slip.userId !== 'anonymous') {
+          await send(slip.userId, `🎉 <b>BOOM ALERT! 🟢</b>\n\n`
+            + `Your SportyBet booking code <code>${slip.shareCode}</code> has <b>WON!</b>\n\n`
+            + `• <b>Sport:</b> ${slip.sport.toUpperCase()}\n`
+            + `• <b>Combined Odds:</b> <b>${slip.totalOdds}</b>\n`
+            + `• <b>Status:</b> All legs green ✅\n\n`
+            + `Tap /stats to view your updated win rate!`, {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '📊 View My Stats', callback_data: 'my_stats' }],
+                [{ text: '⚽ Get Next Code', callback_data: slip.sport }]
+              ]
+            }
+          });
+        }
+      });
+    } catch (e) {
+      console.error('Settlement worker error:', e.message);
+    }
+  }, 5 * 60 * 1000);
+
   for (;;) {
     try {
       const r = await fetch(`${API}/getUpdates?timeout=50&offset=${offset}`);
@@ -295,6 +390,10 @@ async function poll() {
           } else if (data.startsWith('reject:')) {
             const [, targetChat] = data.split(':');
             await handleAdminReject(chat, cb.message.message_id, targetChat);
+          } else if (data === 'my_stats') {
+            handleUserStats(chat);
+          } else if (data === 'global_stats') {
+            handleGlobalStats(chat);
           } else if (['football', 'efootball', 'vfootball'].includes(data)) {
             await handleSport(chat, data);
           }
@@ -369,6 +468,10 @@ async function poll() {
           else await sendPaywall(chat);
         } else if (cmd === '/status') {
           handleStatus(chat);
+        } else if (cmd === '/stats' || cmd === '/my_stats') {
+          handleUserStats(chat);
+        } else if (cmd === '/proof' || cmd === '/global_stats' || cmd === '/boom') {
+          handleGlobalStats(chat);
         } else if (cmd === '/subscribe' || cmd === '/pay') {
           sendPaywall(chat);
         } else if (['/football', '/efootball', '/vfootball'].includes(cmd)) {

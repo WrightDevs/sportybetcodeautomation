@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { CFG } = require('./config');
 const { parseQuestPayWebhook } = require('./questpay');
 const { addSubscription } = require('./subs');
+const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 
 /**
  * Verify QuestPay HMAC-SHA256 signature
@@ -30,10 +31,40 @@ function startWebhookServer(onPaymentActivated) {
   const port = CFG.WEBHOOK_PORT || 3000;
 
   const server = http.createServer((req, res) => {
+    // CORS headers for web client (e.g. Next.js on Vercel)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      return res.end();
+    }
+
     // Health check
     if (req.method === 'GET' && (req.url === '/' || req.url === '/ping' || req.url === '/health')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ status: 'ok', service: 'questpay-webhook-v1', port }));
+    }
+
+    // Analytics API for Next.js Landing Page: GET /api/analytics/global
+    if (req.method === 'GET' && req.url === '/api/analytics/global') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: true, data: getGlobalStats() }));
+    }
+
+    // Analytics API for Next.js User Dashboard: GET /api/analytics/user/:userId
+    if (req.method === 'GET' && req.url.startsWith('/api/analytics/user/')) {
+      const userId = decodeURIComponent(req.url.slice('/api/analytics/user/'.length).split('?')[0]);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: true, data: getUserStats(userId) }));
+    }
+
+    // Slips API: GET /api/slips/latest
+    if (req.method === 'GET' && req.url.startsWith('/api/slips/latest')) {
+      const slips = loadSlips().slice(0, 20);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: true, data: slips }));
     }
 
     // Webhook endpoint: /webhook/questpay, /webhook, or /api/webhook

@@ -7,8 +7,9 @@ const { scan } = require('./scan');
 const { scanLive } = require('./live');
 const { llmRank } = require('./rank');
 const { mint } = require('./mint');
+const { recordSlip } = require('./tracker');
 
-async function generate(preset) {
+async function generate(preset, userId = null) {
   let legs = preset.mode === 'live' ? await scanLive(preset) : await scan(preset);
 
   if (!legs.length && preset.fallbackUpcoming) {
@@ -30,6 +31,20 @@ async function generate(preset) {
     if (r.code) {
       const combined = chunk.reduce((a, l) => a * l.odds, 1).toFixed(1);
       lines.push(`${r.code}  ${chunk.length} legs  @${combined}${r.url ? '\n' + r.url : ''}`);
+
+      // Track slip in database for Boom Rate (win/loss) analytics
+      try {
+        recordSlip({
+          userId,
+          code: r.code,
+          sport: preset.key || (preset.label || '').toLowerCase().replace(/\s+/g, '') || 'football',
+          totalOdds: combined,
+          legs: chunk,
+          url: r.url
+        });
+      } catch (err) {
+        console.error('Failed to record slip:', err.message);
+      }
     } else {
       lines.push(`batch ${i / preset.legs + 1} failed: ${r.err}`);
     }
