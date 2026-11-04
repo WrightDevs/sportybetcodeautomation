@@ -3,7 +3,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { CFG } = require('./config');
 const { parseQuestPayWebhook } = require('./questpay');
-const { addSubscription } = require('./subs');
+const { addSubscription, getSubscription } = require('./subs');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
 const { PRESETS } = require('./presets');
@@ -31,6 +31,90 @@ function verifySignature(rawBody, signatureHeader) {
   } catch (_) {
     return false;
   }
+}
+
+/**
+ * Verify Telegram Login Widget, Mini App initData, or OpenID Connect token
+ */
+function verifyTelegramAuth(data, botToken, maxAgeSec = 86400) {
+  if (!data) return { ok: false, error: 'Missing Telegram authentication payload' };
+
+  // 1. Telegram Mini App initData (passed as { initData: "..." } or raw string)
+  let authData = { ...data };
+  if (typeof data === 'string' || data.initData) {
+    const raw = typeof data === 'string' ? data : data.initData;
+    const params = new URLSearchParams(raw);
+    authData = {};
+    for (const [k, v] of params.entries()) {
+      authData[k] = v;
+    }
+    if (authData.hash) {
+      const secret = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+      const { hash, ...fields } = authData;
+      const checkString = Object.keys(fields).sort().map(k => `${k}=${fields[k]}`).join('\n');
+      const expectedHash = crypto.createHmac('sha256', secret).update(checkString).digest('hex');
+      const a = Buffer.from(expectedHash, 'utf8');
+      const b = Buffer.from(String(hash).trim(), 'utf8');
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        let userObj = {};
+        try { userObj = JSON.parse(authData.user || '{}'); } catch (_) {}
+        return { ok: true, user: { ...authData, ...userObj } };
+      }
+    }
+  }
+
+  // 2. Telegram OpenID Connect / JS SDK (id_token JWT)
+  if (authData.id_token && typeof authData.id_token === 'string') {
+    try {
+      const parts = authData.id_token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+        if (payload && payload.id) {
+          if (payload.exp && Date.now() / 1000 > payload.exp) {
+            return { ok: false, error: 'Telegram ID token expired' };
+          }
+          return {
+            ok: true,
+            user: {
+              id: payload.id,
+              first_name: payload.given_name || payload.name || '',
+              last_name: payload.family_name || '',
+              username: payload.preferred_username || '',
+              photo_url: payload.picture || '',
+              phone_number: payload.phone_number || '',
+              auth_date: payload.iat || Math.floor(Date.now() / 1000)
+            }
+          };
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3. Classic Telegram Login Widget (HMAC-SHA256 with SHA256(botToken))
+  if (authData.hash && authData.auth_date) {
+    const authTime = Number(authData.auth_date);
+    if (Math.abs(Date.now() / 1000 - authTime) > maxAgeSec) {
+      return { ok: false, error: 'Auth date expired (older than 24 hours)' };
+    }
+
+    const { hash, ...fields } = authData;
+    const checkString = Object.keys(fields)
+      .sort()
+      .map(k => `${k}=${fields[k]}`)
+      .join('\n');
+
+    const secret = crypto.createHash('sha256').update(botToken).digest();
+    const expectedHash = crypto.createHmac('sha256', secret).update(checkString).digest('hex');
+
+    const a = Buffer.from(expectedHash, 'utf8');
+    const b = Buffer.from(String(hash).trim(), 'utf8');
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+      return { ok: true, user: fields };
+    }
+    return { ok: false, error: 'Invalid Telegram cryptographic signature' };
+  }
+
+  return { ok: false, error: 'Missing Telegram hash or id_token' };
 }
 
 function startWebhookServer(onPaymentActivated) {
@@ -84,6 +168,53 @@ function startWebhookServer(onPaymentActivated) {
           { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' }
         ]
       }));
+    }
+
+    // Telegram Login Authentication: POST /api/auth/telegram
+    if (req.method === 'POST' && req.url === '/api/auth/telegram') {
+      let bodyStr = '';
+      req.on('data', chunk => {
+        bodyStr += chunk.toString();
+        if (bodyStr.length > 50000) req.connection.destroy();
+      });
+      req.on('end', () => {
+        let payload = {};
+        try { payload = JSON.parse(bodyStr); } catch (_) {}
+
+        const verification = verifyTelegramAuth(payload, CFG.TG_TOKEN);
+        if (!verification.ok) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: verification.error || 'Invalid Telegram authentication'
+          }));
+        }
+
+        const user = verification.user;
+        const sub = getSubscription(user.id);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          user: {
+            id: String(user.id),
+            firstName: user.first_name || user.firstName || user.given_name || user.name || '',
+            lastName: user.last_name || user.lastName || user.family_name || '',
+            username: user.username || user.preferred_username || '',
+            photoUrl: user.photo_url || user.photoUrl || user.picture || '',
+            phoneNumber: user.phone_number || user.phoneNumber || null,
+            authDate: Number(user.auth_date) || Number(user.iat) || Math.floor(Date.now() / 1000)
+          },
+          subscription: {
+            active: sub.active,
+            isAdmin: !!sub.isAdmin,
+            daysLeft: sub.daysLeft,
+            expiresAt: sub.expiresAt || null,
+            expDate: sub.expDate || null
+          }
+        }));
+      });
+      return;
     }
 
     // Code Generator API: GET or POST /api/generate
@@ -246,4 +377,4 @@ function startWebhookServer(onPaymentActivated) {
   return server;
 }
 
-module.exports = { startWebhookServer, verifySignature };
+module.exports = { startWebhookServer, verifySignature, verifyTelegramAuth };

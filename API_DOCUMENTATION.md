@@ -9,21 +9,105 @@ Official API documentation for the SportyBet Automation engine, Telegram bot, Qu
 ---
 
 ## Table of Contents
-1. [Code Generation APIs](#1-code-generation-apis)
+1. [Telegram Login & Authentication](#1-telegram-login--authentication)
+   - `POST /api/auth/telegram`
+   - Setup in `@BotFather`
+2. [Code Generation APIs](#2-code-generation-apis)
    - `POST /api/generate`
    - `GET /api/sports`
-2. [Analytics & Boom Rate APIs](#2-analytics--boom-rate-apis)
+3. [Analytics & Boom Rate APIs](#3-analytics--boom-rate-apis)
    - `GET /api/analytics/global`
    - `GET /api/analytics/user/:userId`
    - `GET /api/slips/latest`
-3. [Payment & QuestPay Webhooks](#3-payment--questpay-webhooks)
+4. [Payment & QuestPay Webhooks](#4-payment--questpay-webhooks)
    - `POST /webhook/questpay`
    - `GET /ping`
-4. [Next.js / TypeScript Integration Client](#4-nextjs--typescript-integration-client)
+5. [Next.js / TypeScript Integration Client](#5-nextjs--typescript-integration-client)
 
 ---
 
-## 1. Code Generation APIs
+## 1. Telegram Login & Authentication
+
+Users authenticate into the web dashboard directly using their Telegram account via the Telegram Login Widget or Telegram Login JS SDK. Once verified, the API returns the user profile along with their real-time VIP subscription status (active, days left, expiration date).
+
+### Authenticate Telegram User
+- **Endpoint:** `/api/auth/telegram`
+- **Method:** `POST`
+- **Headers:** `Content-Type: application/json`
+
+#### Request Payload Options
+
+##### Option A: Classic Telegram Login Widget
+When using the Telegram Login widget (`data-telegram-login="my_sporty_daily_bot"`), pass the callback payload:
+```json
+{
+  "id": 6916043986,
+  "first_name": "Wright",
+  "last_name": "Dev",
+  "username": "wrightdev",
+  "photo_url": "https://t.me/i/userpic/320/wrightdev.jpg",
+  "auth_date": 1741234567,
+  "hash": "d17d685ba9ae31b025fc768caaeb6bc6f2362f4164c041204c3ac36b5c33f454"
+}
+```
+
+##### Option B: Telegram Login Library / OpenID Connect (`id_token`)
+When using `telegram-login.js` or OpenID Connect:
+```json
+{
+  "id_token": "eyJhbGciOiJSUzI1NiIs..."
+}
+```
+
+##### Option C: Telegram Mini App `initData`
+```json
+{
+  "initData": "query_id=...&user=%7B%22id%22%3A6916043986...&auth_date=1741234567&hash=..."
+}
+```
+
+#### Success Response (`200 OK`)
+```json
+{
+  "success": true,
+  "user": {
+    "id": "6916043986",
+    "firstName": "Wright",
+    "lastName": "Dev",
+    "username": "wrightdev",
+    "photoUrl": "https://t.me/i/userpic/320/wrightdev.jpg",
+    "phoneNumber": "+2348012345678",
+    "authDate": 1741234567
+  },
+  "subscription": {
+    "active": true,
+    "isAdmin": false,
+    "daysLeft": 7,
+    "expiresAt": 1741839367000,
+    "expDate": "13 Mar 2026, 17:36"
+  }
+}
+```
+
+#### Error Response (`401 Unauthorized`)
+```json
+{
+  "success": false,
+  "error": "Invalid Telegram cryptographic signature"
+}
+```
+
+#### BotFather Whitelist Configuration (Required)
+Before embedding the widget or login button on your site, authorize your website URL in Telegram:
+1. Open [@BotFather](https://t.me/botfather) in Telegram.
+2. Send `/setdomain`
+3. Select your bot: `@my_sporty_daily_bot`
+4. Enter your web app domain (e.g., `https://sportybet-frontend.vercel.app` or your custom domain).
+*(For local development testing, you can use an ngrok or Cloudflare tunnel URL).*
+
+---
+
+## 2. Code Generation APIs
 
 ### Generate Booking Codes
 Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direct booking URLs.
@@ -302,6 +386,39 @@ export interface UserStatsResponse {
   };
 }
 
+export interface TelegramAuthResponse {
+  success: boolean;
+  error?: string;
+  user?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    username: string;
+    photoUrl: string;
+    phoneNumber?: string;
+    authDate: number;
+  };
+  subscription?: {
+    active: boolean;
+    isAdmin: boolean;
+    daysLeft: number | string;
+    expiresAt: number | null;
+    expDate: string | null;
+  };
+}
+
+/**
+ * Verify Telegram login data and fetch user profile + VIP subscription
+ */
+export async function authenticateTelegramUser(authData: Record<string, any>): Promise<TelegramAuthResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/telegram`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(authData)
+  });
+  return res.json();
+}
+
 /**
  * Generate fresh booking codes for a sport
  */
@@ -332,6 +449,54 @@ export async function getGlobalStats(): Promise<GlobalStatsResponse> {
 export async function getUserStats(userId: string): Promise<UserStatsResponse> {
   const res = await fetch(`${API_BASE}/api/analytics/user/${encodeURIComponent(userId)}`, { cache: 'no-store' });
   return res.json();
+}
+```
+
+### React / Next.js Telegram Login Button Component Example
+
+```tsx
+'use client';
+import { useEffect, useRef } from 'react';
+import { authenticateTelegramUser, TelegramAuthResponse } from '@/lib/sportyApi';
+
+interface TelegramLoginProps {
+  botUsername?: string;
+  onAuth: (res: TelegramAuthResponse) => void;
+}
+
+export function TelegramLoginButton({
+  botUsername = 'my_sporty_daily_bot',
+  onAuth
+}: TelegramLoginProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Expose callback on global window object for the Telegram widget
+    (window as any).onTelegramAuth = async (user: any) => {
+      try {
+        const result = await authenticateTelegramUser(user);
+        onAuth(result);
+      } catch (err) {
+        console.error('Failed to verify Telegram auth:', err);
+      }
+    };
+
+    if (containerRef.current) {
+      containerRef.current.innerHTML = '';
+      const script = document.createElement('script');
+      script.src = 'https://telegram.org/js/telegram-widget.js?22';
+      script.setAttribute('data-telegram-login', botUsername);
+      script.setAttribute('data-size', 'large');
+      script.setAttribute('data-radius', '8');
+      script.setAttribute('data-request-access', 'write');
+      script.setAttribute('data-userpic', 'true');
+      script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+      script.async = true;
+      containerRef.current.appendChild(script);
+    }
+  }, [botUsername, onAuth]);
+
+  return <div ref={containerRef} className="my-4 flex justify-center" />;
 }
 ```
 
