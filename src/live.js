@@ -82,3 +82,4 @@ async function scanLive(cfg) {
 }
 
 module.exports = { scanLive, qualifies, clockOf, scoreOf };
+

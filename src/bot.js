@@ -112,16 +112,28 @@ async function handleQuestPayInit(chat) {
     });
   }
 
-  const text = `💳 <b>QuestPay Hosted Checkout</b>\n\n`
-    + `Amount: <b>₦${CFG.SUB_PRICE.toLocaleString()}</b> (${CFG.SUB_DAYS} Days VIP Access)\n`
-    + `Reference: <code>${res.reference}</code>\n\n`
-    + `1. Tap <b>"Open Checkout Page"</b> below to pay.\n`
-    + `2. Once you complete the transfer, return here and tap <b>"Check Payment Status"</b> to activate immediately!`;
+  let text = `💳 <b>QuestPay VIP Checkout</b>\n\n`
+    + `• <b>Plan:</b> ${CFG.SUB_DAYS} Days VIP Access\n`
+    + `• <b>Amount:</b> <b>₦${CFG.SUB_PRICE.toLocaleString()}</b>\n`
+    + `• <b>Reference:</b> <code>${res.reference}</code>\n\n`;
+
+  if (res.virtualAccount && res.virtualAccount.accountNumber) {
+    const va = res.virtualAccount;
+    text += `🏦 <b>Dedicated Transfer Account:</b>\n`
+      + `• <b>Bank:</b> <b>${va.bankName || 'OPay'}</b>\n`
+      + `• <b>Account Number:</b> <code>${va.accountNumber}</code>\n`
+      + `• <b>Account Name:</b> <b>${va.accountName || 'Quest Labs'}</b>\n\n`
+      + `Transfer ₦${CFG.SUB_PRICE.toLocaleString()} directly to this dedicated account. It is monitored automatically and credited by QuestPay.\n\n`
+      + `👉 You can also tap the web link below to open the checkout page:`;
+  } else {
+    text += `Tap the button below to open your secure QuestPay checkout page and complete payment:`;
+  }
 
   const reply_markup = {
     inline_keyboard: [
-      [{ text: '🌐 Open Checkout Page', url: res.checkout_url }],
-      [{ text: '🔄 Check Payment Status', callback_data: `verify_ref:${res.reference}` }],
+      [{ text: '🌐 Open QuestPay Checkout', url: res.checkout_url }],
+      [{ text: '✅ I Have Paid (Verify)', callback_data: `verify_ref:${res.reference}` }],
+      [{ text: '🏦 Bank Transfer Fallback', callback_data: 'pay_transfer' }],
       [{ text: '🔙 Back', callback_data: 'menu' }]
     ]
   };

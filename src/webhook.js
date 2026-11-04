@@ -1,8 +1,30 @@
 'use strict';
 const http = require('http');
+const crypto = require('crypto');
 const { CFG } = require('./config');
 const { parseQuestPayWebhook } = require('./questpay');
 const { addSubscription } = require('./subs');
+
+/**
+ * Verify QuestPay HMAC-SHA256 signature
+ * Header: x-questpay-signature
+ * Secret: CFG.QUESTPAY_API_KEY (or CFG.QUESTPAY_WEBHOOK_SECRET)
+ */
+function verifySignature(rawBody, signatureHeader) {
+  const secret = CFG.QUESTPAY_WEBHOOK_SECRET || CFG.QUESTPAY_API_KEY;
+  if (!secret) return true; // If no key configured, skip check
+  if (!signatureHeader) return false;
+
+  try {
+    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+    const a = Buffer.from(expected, 'utf8');
+    const b = Buffer.from(String(signatureHeader).trim(), 'utf8');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch (_) {
+    return false;
+  }
+}
 
 function startWebhookServer(onPaymentActivated) {
   const port = CFG.WEBHOOK_PORT || 3000;
@@ -14,18 +36,25 @@ function startWebhookServer(onPaymentActivated) {
       return res.end(JSON.stringify({ status: 'ok', service: 'questpay-webhook-v1', port }));
     }
 
-    // Webhook endpoint: /webhook/questpay or /webhook
+    // Webhook endpoint: /webhook/questpay, /webhook, or /api/webhook
     if (req.method === 'POST' && (req.url.startsWith('/webhook') || req.url.startsWith('/api/webhook'))) {
-      let body = '';
+      let rawBody = '';
       req.on('data', chunk => {
-        body += chunk.toString();
-        if (body.length > 1e6) {
+        rawBody += chunk.toString();
+        if (rawBody.length > 1e6) {
           req.connection.destroy();
         }
       });
 
       req.on('end', async () => {
-        const parsed = parseQuestPayWebhook(body);
+        const sig = req.headers['x-questpay-signature'];
+        if (sig && !verifySignature(rawBody, sig)) {
+          console.warn('  questpay webhook: invalid signature rejected');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Invalid signature' }));
+        }
+
+        const parsed = parseQuestPayWebhook(rawBody);
 
         if (!parsed.ok) {
           console.log('  questpay webhook unhandled:', parsed.err || 'event ignored');
@@ -66,4 +95,4 @@ function startWebhookServer(onPaymentActivated) {
   return server;
 }
 
-module.exports = { startWebhookServer };
+module.exports = { startWebhookServer, verifySignature };

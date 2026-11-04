@@ -12,7 +12,8 @@ async function initializeQuestPayCheckout(chatId, email = null) {
     return { ok: false, err: 'QuestPay API key (QUESTPAY_API_KEY) is not set in .env' };
   }
 
-  const userEmail = email || `user_${chatId}@sportybetcodes.com`;
+  // Use a valid email domain (@gmail.com) as QuestPay payment providers (Xixapay) validate MX records
+  const userEmail = email || `user_${chatId}@gmail.com`;
   const reference = `VIP-${chatId}-${Date.now()}`;
   const amount = Number(CFG.SUB_PRICE) || 1000;
 
@@ -21,7 +22,8 @@ async function initializeQuestPayCheckout(chatId, email = null) {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${CFG.QUESTPAY_API_KEY}`
+        authorization: `Bearer ${CFG.QUESTPAY_API_KEY}`,
+        'x-api-key': CFG.QUESTPAY_API_KEY
       },
       body: JSON.stringify({
         reference,
@@ -39,11 +41,22 @@ async function initializeQuestPayCheckout(chatId, email = null) {
     const j = await r.json().catch(() => ({}));
 
     if (j.success && j.data && j.data.checkout_url) {
+      // Fetch dynamic virtual bank account assigned to this checkout reference
+      let virtualAccount = null;
+      try {
+        const pub = await fetch(`${BASE_URL}/public/checkout/${encodeURIComponent(reference)}`);
+        const pubJ = await pub.json().catch(() => ({}));
+        if (pubJ.success && pubJ.data?.business?.virtualAccount) {
+          virtualAccount = pubJ.data.business.virtualAccount;
+        }
+      } catch (_) {}
+
       return {
         ok: true,
         reference,
         checkout_url: j.data.checkout_url,
         amount: j.data.amount || amount,
+        virtualAccount,
         data: j.data
       };
     }
@@ -73,7 +86,8 @@ async function verifyQuestPayCheckout(reference) {
     const r = await fetch(`${BASE_URL}/v1/checkout/verify/${encodeURIComponent(cleanRef)}`, {
       method: 'GET',
       headers: {
-        authorization: `Bearer ${CFG.QUESTPAY_API_KEY}`
+        authorization: `Bearer ${CFG.QUESTPAY_API_KEY}`,
+        'x-api-key': CFG.QUESTPAY_API_KEY
       }
     });
 
