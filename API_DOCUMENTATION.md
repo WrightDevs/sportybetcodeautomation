@@ -9,8 +9,10 @@ Official API documentation for the SportyBet Automation engine, Telegram bot, Qu
 ---
 
 ## Table of Contents
-1. [Telegram Login & Authentication](#1-telegram-login--authentication)
+1. [Telegram Login & Account Linking](#1-telegram-login--account-linking)
    - `POST /api/auth/telegram`
+   - `GET /api/subscription/:userId`
+   - [How Web and Telegram Sync Payments (2-Way Flow)](#how-web-and-telegram-sync-payments-2-way-flow)
    - Setup in `@BotFather`
 2. [Code Generation APIs](#2-code-generation-apis)
    - `POST /api/generate`
@@ -19,14 +21,16 @@ Official API documentation for the SportyBet Automation engine, Telegram bot, Qu
    - `GET /api/analytics/global`
    - `GET /api/analytics/user/:userId`
    - `GET /api/slips/latest`
-4. [Payment & QuestPay Webhooks](#4-payment--questpay-webhooks)
-   - `POST /webhook/questpay`
+4. [Payment & QuestPay Checkout](#4-payment--questpay-checkout)
+   - `POST /api/payment/initialize` *(Web Dashboard Checkout)*
+   - `GET /api/payment/verify/:reference` *(Web Verification)*
+   - `POST /webhook/questpay` *(QuestPay IPN)*
    - `GET /ping`
 5. [Next.js / TypeScript Integration Client](#5-nextjs--typescript-integration-client)
 
 ---
 
-## 1. Telegram Login & Authentication
+## 1. Telegram Login & Account Linking
 
 Users authenticate into the web dashboard directly using their Telegram account via the Telegram Login Widget or Telegram Login JS SDK. Once verified, the API returns the user profile along with their real-time VIP subscription status (active, days left, expiration date).
 
@@ -89,13 +93,61 @@ When using `telegram-login.js` or OpenID Connect:
 }
 ```
 
-#### Error Response (`401 Unauthorized`)
+---
+
+### Check Subscription Status Anytime
+- **Endpoint:** `/api/subscription/:userId`
+- **Method:** `GET`
+- **Example:** `GET /api/subscription/6916043986`
+
+#### Response (`200 OK`)
 ```json
 {
-  "success": false,
-  "error": "Invalid Telegram cryptographic signature"
+  "success": true,
+  "userId": "6916043986",
+  "subscription": {
+    "active": true,
+    "isAdmin": false,
+    "daysLeft": 7,
+    "expiresAt": 1741839367000,
+    "expDate": "13 Mar 2026, 17:36"
+  }
 }
 ```
+
+---
+
+### How Web and Telegram Sync Payments (2-Way Flow)
+
+The system unifies identity using the **Telegram User ID** (`chatId`, e.g. `6916043986`). Because MongoDB persists subscribers under this unique ID, payments made on either platform instantly unlock both:
+
+#### Scenario A: User pays inside the Telegram Bot ➔ Opens Website
+1. User pays ₦1,000 on Telegram via the bot (`/pay` or QuestPay link).
+2. The payment webhook saves their subscription under their Telegram ID: `6916043986`.
+3. User opens the website dashboard and clicks **"Log In with Telegram"**.
+4. The dashboard calls `POST /api/auth/telegram`.
+5. The API detects user `6916043986` and returns `subscription.active: true` with remaining days.
+6. **Result:** User immediately gets VIP on the dashboard without paying again!
+
+#### Scenario B: User signs up on Website ➔ Pays on Web Dashboard
+1. On the website dashboard, user logs in with Telegram (or links their Telegram account in Settings). The website stores their `telegramId: "6916043986"`.
+2. User clicks **"Upgrade to VIP"** on the website.
+3. The website calls `POST /api/payment/initialize` with `{ "telegramId": "6916043986" }`.
+4. User pays via dynamic Virtual Account (Bank Transfer) or Card.
+5. QuestPay webhook fires or web verification runs:
+   - Backend marks `6916043986` as VIP active in MongoDB.
+   - The Telegram bot sends a direct message to the user on Telegram:
+     *`🎉 Payment of ₦1,000 received! Your VIP subscription has been activated for 7 days!`*
+6. **Result:** User immediately gets VIP on both the website and Telegram!
+
+#### Scenario C: Website has existing Email/Password Auth
+If the website dashboard uses traditional Email/Password accounts:
+1. In the User Settings/Profile tab, show a **"Link Telegram Account"** button containing the Telegram Login Widget.
+2. When the user taps it, Telegram sends the verified `id` (e.g. `6916043986`).
+3. Save `telegramId: id` in your user document in MongoDB.
+4. Call `GET /api/subscription/:telegramId` to check if they already have an active subscription from the bot!
+
+---
 
 #### BotFather Whitelist Configuration (Required)
 Before embedding the widget or login button on your site, authorize your website URL in Telegram:
@@ -304,7 +356,60 @@ Returns the latest slips for live tickers, proof tickers, or recent activity str
 
 ---
 
-## 3. Payment & QuestPay Webhooks
+## 4. Payment & QuestPay Checkout
+
+### Initialize Web Checkout
+Used when a user clicks "Upgrade to VIP" on the web dashboard. Automatically links the checkout to their Telegram ID so both platforms get credited.
+
+- **Endpoint:** `/api/payment/initialize`
+- **Method:** `POST`
+- **Headers:** `Content-Type: application/json`
+
+#### Request Body
+```json
+{
+  "telegramId": "6916043986",
+  "email": "user@example.com"
+}
+```
+
+#### Success Response (`200 OK`)
+```json
+{
+  "success": true,
+  "reference": "VIP-6916043986-1741234567890",
+  "checkoutUrl": "https://payments.questlabs.cc/pay/VIP-6916043986-1741234567890",
+  "amount": 1000,
+  "virtualAccount": {
+    "bankName": "Wema Bank / Xixapay",
+    "accountNumber": "9876543210",
+    "accountName": "SportyBet Codes VIP",
+    "expiresAt": "2026-11-04T18:30:00.000Z"
+  }
+}
+```
+
+---
+
+### Verify Web Payment Status
+Called by the web frontend after the user completes payment (or clicks "I have transferred"):
+
+- **Endpoint:** `/api/payment/verify/:reference`
+- **Method:** `GET`
+- **Example:** `/api/payment/verify/VIP-6916043986-1741234567890`
+
+#### Success Response (`200 OK`)
+```json
+{
+  "success": true,
+  "status": "paid",
+  "chatId": "6916043986",
+  "reference": "VIP-6916043986-1741234567890",
+  "amount": 1000
+}
+```
+
+---
 
 ### QuestPay Payment Webhook
 Configured inside the QuestPay Merchant Dashboard under **Webhook Settings**:
@@ -320,7 +425,7 @@ Configured inside the QuestPay Merchant Dashboard under **Webhook Settings**:
 
 ---
 
-## 4. Next.js / TypeScript Integration Client
+## 5. Next.js / TypeScript Integration Client
 
 Your friend can copy this file into their Next.js project under `lib/sportyApi.ts`:
 
@@ -386,6 +491,32 @@ export interface UserStatsResponse {
   };
 }
 
+export interface SubscriptionResponse {
+  success: boolean;
+  userId: string;
+  subscription: {
+    active: boolean;
+    isAdmin: boolean;
+    daysLeft: number | string;
+    expiresAt: number | null;
+    expDate: string | null;
+  };
+}
+
+export interface CheckoutResponse {
+  success: boolean;
+  reference?: string;
+  checkoutUrl?: string;
+  amount?: number;
+  virtualAccount?: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+    expiresAt?: string;
+  };
+  error?: string;
+}
+
 export interface TelegramAuthResponse {
   success: boolean;
   error?: string;
@@ -416,6 +547,34 @@ export async function authenticateTelegramUser(authData: Record<string, any>): P
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(authData)
   });
+  return res.json();
+}
+
+/**
+ * Check a user's subscription status anytime using their Telegram ID
+ */
+export async function checkSubscription(telegramId: string): Promise<SubscriptionResponse> {
+  const res = await fetch(`${API_BASE}/api/subscription/${encodeURIComponent(telegramId)}`, { cache: 'no-store' });
+  return res.json();
+}
+
+/**
+ * Initialize QuestPay checkout for a user on the web dashboard
+ */
+export async function initializePayment(telegramId: string, email?: string): Promise<CheckoutResponse> {
+  const res = await fetch(`${API_BASE}/api/payment/initialize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ telegramId, email })
+  });
+  return res.json();
+}
+
+/**
+ * Verify a payment reference after user transfers or pays
+ */
+export async function verifyPayment(reference: string): Promise<{ success: boolean; status?: string; message?: string }> {
+  const res = await fetch(`${API_BASE}/api/payment/verify/${encodeURIComponent(reference)}`, { cache: 'no-store' });
   return res.json();
 }
 

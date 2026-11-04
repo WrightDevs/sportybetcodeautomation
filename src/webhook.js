@@ -2,7 +2,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { CFG } = require('./config');
-const { parseQuestPayWebhook } = require('./questpay');
+const { parseQuestPayWebhook, initializeQuestPayCheckout, verifyQuestPayCheckout } = require('./questpay');
 const { addSubscription, getSubscription } = require('./subs');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
@@ -214,6 +214,107 @@ function startWebhookServer(onPaymentActivated) {
           }
         }));
       });
+      return;
+    }
+
+    // Subscription Status API: GET /api/subscription/:userId
+    if (req.method === 'GET' && req.url.startsWith('/api/subscription/')) {
+      const userId = decodeURIComponent(req.url.slice('/api/subscription/'.length).split('?')[0]);
+      const sub = getSubscription(userId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: true,
+        userId,
+        subscription: {
+          active: sub.active,
+          isAdmin: !!sub.isAdmin,
+          daysLeft: sub.daysLeft,
+          expiresAt: sub.expiresAt || null,
+          expDate: sub.expDate || null
+        }
+      }));
+    }
+
+    // Web Payment Checkout Initialization: POST /api/payment/initialize
+    if (req.method === 'POST' && req.url === '/api/payment/initialize') {
+      let bodyStr = '';
+      req.on('data', chunk => {
+        bodyStr += chunk.toString();
+        if (bodyStr.length > 50000) req.connection.destroy();
+      });
+      req.on('end', async () => {
+        let payload = {};
+        try { payload = JSON.parse(bodyStr); } catch (_) {}
+
+        const telegramId = payload.telegramId || payload.chatId || payload.userId;
+        if (!telegramId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: 'telegramId is required to link payment to Telegram account'
+          }));
+        }
+
+        const email = payload.email || `user_${telegramId}@gmail.com`;
+        const checkout = await initializeQuestPayCheckout(telegramId, email);
+
+        if (!checkout.ok) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: checkout.err || 'Failed to initialize payment checkout'
+          }));
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          reference: checkout.reference,
+          checkoutUrl: checkout.checkout_url,
+          amount: checkout.amount,
+          virtualAccount: checkout.virtualAccount
+        }));
+      });
+      return;
+    }
+
+    // Web Payment Verification: GET /api/payment/verify/:reference
+    if (req.method === 'GET' && req.url.startsWith('/api/payment/verify/')) {
+      const ref = decodeURIComponent(req.url.slice('/api/payment/verify/'.length).split('?')[0]);
+      (async () => {
+        const result = await verifyQuestPayCheckout(ref);
+        if (!result.ok) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            status: result.status,
+            message: result.err || 'Payment not yet confirmed'
+          }));
+        }
+
+        const chatId = result.chatId;
+        if (chatId) {
+          addSubscription(chatId, result.days || CFG.SUB_DAYS, {
+            method: 'questpay_web_verify',
+            reference: ref,
+            amount: result.amount,
+            paidAt: result.paidAt || Date.now()
+          });
+
+          if (typeof onPaymentActivated === 'function') {
+            await onPaymentActivated(chatId, ref, result.amount);
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          status: 'paid',
+          chatId,
+          reference: ref,
+          amount: result.amount
+        }));
+      })();
       return;
     }
 
