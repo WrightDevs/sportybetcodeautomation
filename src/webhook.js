@@ -212,43 +212,41 @@ function startWebhookServer(onPaymentActivated) {
     // Diagnostic endpoint: GET /api/debug/live
     if (req.method === 'GET' && req.url === '/api/debug/live') {
       (async () => {
-        const results = {};
-        const candidates = [
-          'factsCenter/live',
-          'factsCenter/inplay',
-          'factsCenter/eventList',
-          'factsCenter/liveData',
-          'factsCenter/liveMatchList',
-          'factsCenter/liveEventList',
-          'factsCenter/realTimeEvents',
-          'factsCenter/liveScore',
-          'factsCenter/liveScheduleEvents',
-          'factsCenter/wapLiveSchedule',
-          'factsCenter/popularEvents',
-          'factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18,14&pageSize=10&pageNum=1',
-          'factsCenter/pcUpcomingEvents?sportId=sr:sport:137&marketId=1,18,14&pageSize=10&pageNum=1'
-        ];
+        const url = `${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18,14,68&pageSize=50&pageNum=1&option=1&order=0&todayGames=false&timeline=1&_t=${Date.now()}`;
+        const j = await get(url);
+        const tournaments = j?.data?.tournaments || [];
+        const now = Date.now();
+        const events = [];
 
-        for (const ep of candidates) {
-          try {
-            const url = `${API}/${ep}${ep.includes('?') ? '&' : '?'}_t=${Date.now()}`;
-            const r = await fetch(url, { headers: HDR });
-            const text = await r.text();
-            let j = null;
-            try { j = JSON.parse(text); } catch (_) {}
-            results[ep.split('?')[0]] = {
-              status: r.status,
-              bizCode: j?.bizCode,
-              totalNum: j?.data?.totalNum ?? (Array.isArray(j?.data) ? j.data.length : (j?.data?.tournaments?.length || 0)),
-              preview: text.slice(0, 150)
-            };
-          } catch (e) {
-            results[ep.split('?')[0]] = { err: e.message };
+        for (const t of tournaments) {
+          for (const e of (t.events || [])) {
+            const ko = Number(e.estimateStartTime);
+            const diffSec = Math.round((ko - now) / 1000);
+            events.push({
+              id: e.eventId,
+              league: t.name,
+              home: e.homeTeamName,
+              away: e.awayTeamName,
+              status: e.matchStatus,
+              ko,
+              startsInSec: diffSec,
+              markets: (e.markets || []).map(m => ({
+                id: m.id,
+                desc: m.name || m.desc,
+                specifier: m.specifier,
+                outcomes: (m.outcomes || []).map(o => `${o.desc}: ${o.odds}`)
+              }))
+            });
           }
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: true, results }, null, 2));
+        return res.end(JSON.stringify({
+          success: true,
+          total: events.length,
+          serverTime: new Date(now).toISOString(),
+          events: events.slice(0, 10)
+        }, null, 2));
       })();
       return;
     }
