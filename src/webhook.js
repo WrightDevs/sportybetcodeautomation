@@ -209,48 +209,6 @@ function startWebhookServer(onPaymentActivated) {
       return res.end(JSON.stringify({ status: 'ok', service: 'questpay-webhook-v1', port }));
     }
 
-    // Diagnostic endpoint: GET /api/debug/live
-    if (req.method === 'GET' && req.url === '/api/debug/live') {
-      (async () => {
-        const url = `${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&marketId=1,18,14,68&pageSize=50&pageNum=1&option=1&order=0&todayGames=false&timeline=1&_t=${Date.now()}`;
-        const j = await get(url);
-        const tournaments = j?.data?.tournaments || [];
-        const now = Date.now();
-        const events = [];
-
-        for (const t of tournaments) {
-          for (const e of (t.events || [])) {
-            const ko = Number(e.estimateStartTime);
-            const diffSec = Math.round((ko - now) / 1000);
-            events.push({
-              id: e.eventId,
-              league: t.name,
-              home: e.homeTeamName,
-              away: e.awayTeamName,
-              status: e.matchStatus,
-              ko,
-              startsInSec: diffSec,
-              markets: (e.markets || []).map(m => ({
-                id: m.id,
-                desc: m.name || m.desc,
-                specifier: m.specifier,
-                outcomes: (m.outcomes || []).map(o => `${o.desc}: ${o.odds}`)
-              }))
-            });
-          }
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({
-          success: true,
-          total: events.length,
-          serverTime: new Date(now).toISOString(),
-          events: events.slice(0, 10)
-        }, null, 2));
-      })();
-      return;
-    }
-
     // Analytics API for Next.js Landing Page: GET /api/analytics/global
     if (req.method === 'GET' && req.url === '/api/analytics/global') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
