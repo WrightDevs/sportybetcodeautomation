@@ -5,6 +5,12 @@ const { CFG } = require('./config');
 const { parseQuestPayWebhook } = require('./questpay');
 const { addSubscription } = require('./subs');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
+const { generate } = require('./run');
+const { PRESETS } = require('./presets');
+
+// In-memory cache & concurrency lock for web generation
+let isGenerating = false;
+const codeCache = new Map(); // sport -> { data, timestamp }
 
 /**
  * Verify QuestPay HMAC-SHA256 signature
@@ -65,6 +71,116 @@ function startWebhookServer(onPaymentActivated) {
       const slips = loadSlips().slice(0, 20);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ success: true, data: slips }));
+    }
+
+    // Available Sports API: GET /api/sports
+    if (req.method === 'GET' && (req.url === '/api/sports' || req.url === '/api/presets')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: true,
+        sports: [
+          { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures, ~10 odds accumulators' },
+          { id: 'efootball', name: 'eFootball', icon: '🕹', desc: 'In-play matches with 3+ margin after 40′' },
+          { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' }
+        ]
+      }));
+    }
+
+    // Code Generator API: GET or POST /api/generate
+    if ((req.method === 'GET' || req.method === 'POST') && req.url.startsWith('/api/generate')) {
+      const handleGenerate = async (params) => {
+        const sportKey = String(params.sport || params.preset || 'football').toLowerCase();
+        const userId = params.userId || params.email || 'web_user';
+        const fresh = params.fresh === true || params.fresh === 'true';
+
+        const preset = PRESETS[sportKey];
+        if (!preset) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: `Invalid sport '${sportKey}'. Valid options: football, efootball, vfootball`
+          }));
+        }
+
+        // Return recent cache (within 60s) to give instant sub-50ms response if not forced fresh
+        const cached = codeCache.get(sportKey);
+        if (!fresh && cached && Date.now() - cached.timestamp < 60000) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: true,
+            cached: true,
+            sport: sportKey,
+            count: cached.data.count,
+            codes: cached.data.codes || [],
+            lines: cached.data.lines || [],
+            generatedAt: new Date(cached.timestamp).toISOString()
+          }));
+        }
+
+        if (isGenerating) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            busy: true,
+            message: 'Another code generation is currently in progress. Please retry in a few seconds.'
+          }));
+        }
+
+        isGenerating = true;
+        try {
+          const result = await generate(preset, userId);
+
+          if (!result.count) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              success: false,
+              sport: sportKey,
+              count: 0,
+              message: `${preset.label}: nothing qualified right now. Check back shortly!`
+            }));
+          }
+
+          codeCache.set(sportKey, { data: result, timestamp: Date.now() });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: true,
+            cached: false,
+            sport: sportKey,
+            count: result.count,
+            codes: result.codes || [],
+            lines: result.lines || [],
+            generatedAt: new Date().toISOString()
+          }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: err.message
+          }));
+        } finally {
+          isGenerating = false;
+        }
+      };
+
+      if (req.method === 'GET') {
+        const u = new URL(req.url, 'http://localhost');
+        const params = Object.fromEntries(u.searchParams.entries());
+        return handleGenerate(params);
+      }
+
+      // POST request with JSON body
+      let bodyStr = '';
+      req.on('data', chunk => {
+        bodyStr += chunk.toString();
+        if (bodyStr.length > 50000) req.connection.destroy();
+      });
+      req.on('end', () => {
+        let params = {};
+        try { params = JSON.parse(bodyStr); } catch (_) {}
+        return handleGenerate(params);
+      });
+      return;
     }
 
     // Webhook endpoint: /webhook/questpay, /webhook, or /api/webhook

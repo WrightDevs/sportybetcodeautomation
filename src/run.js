@@ -22,6 +22,7 @@ async function generate(preset, userId = null) {
 
   const short = legs.slice(0, preset.legs * preset.maxCodes);
   const lines = [];
+  const codes = [];
 
   for (let i = 0; i < short.length; i += preset.legs) {
     const chunk = short.slice(i, i + preset.legs);
@@ -30,7 +31,16 @@ async function generate(preset, userId = null) {
 
     if (r.code) {
       const combined = chunk.reduce((a, l) => a * l.odds, 1).toFixed(1);
-      lines.push(`${r.code}  ${chunk.length} legs  @${combined}${r.url ? '\n' + r.url : ''}`);
+      const codeUrl = r.url || `https://www.sportybet.com/${CFG.REGION}/?shareCode=${r.code}`;
+      lines.push(`${r.code}  ${chunk.length} legs  @${combined}${codeUrl ? '\n' + codeUrl : ''}`);
+
+      codes.push({
+        code: r.code,
+        url: codeUrl,
+        odds: Number(combined),
+        legsCount: chunk.length,
+        sport: preset.key || 'football'
+      });
 
       // Track slip in database for Boom Rate (win/loss) analytics
       try {
@@ -40,7 +50,7 @@ async function generate(preset, userId = null) {
           sport: preset.key || (preset.label || '').toLowerCase().replace(/\s+/g, '') || 'football',
           totalOdds: combined,
           legs: chunk,
-          url: r.url
+          url: codeUrl
         });
       } catch (err) {
         console.error('Failed to record slip:', err.message);
@@ -55,7 +65,7 @@ async function generate(preset, userId = null) {
   const stamp = lagosDay() + '-' + new Date().toISOString().slice(11, 16).replace(':', '');
   fs.writeFileSync(path.join(CFG.OUT_DIR, `${stamp}.txt`), lines.join('\n\n') + '\n');
 
-  return { lines, count: lines.filter(l => !l.startsWith('batch')).length };
+  return { lines, codes, count: codes.length };
 }
 
 module.exports = { generate };
