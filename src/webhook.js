@@ -7,7 +7,7 @@ const { addSubscription, getSubscription, isSubscribed } = require('./subs');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
 const { PRESETS } = require('./presets');
-const { API, get } = require('./api');
+const { API, HDR, get } = require('./api');
 const {
   scanQuestSpecial,
   startSession: startQuestSpecialSession,
