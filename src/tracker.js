@@ -4,6 +4,7 @@ const path = require('path');
 const { CFG } = require('./config');
 const { get, API } = require('./api');
 const { sleep } = require('./util');
+const { syncSlipToDb } = require('./db');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const SLIPS_FILE = path.join(DATA_DIR, 'slips.json');
@@ -68,6 +69,7 @@ function recordSlip({ userId, code, sport, totalOdds, legs, url }) {
   // Keep last 1,000 slips locally to conserve memory/disk
   if (slips.length > 1000) slips.length = 1000;
   saveSlips(slips);
+  try { syncSlipToDb(slip); } catch (_) {}
   return slip;
 }
 
@@ -215,7 +217,14 @@ async function settlePendingSlips(onBoom = null) {
     await sleep(200);
   }
 
-  if (modified) saveSlips(slips);
+  if (modified) {
+    saveSlips(slips);
+    for (const s of pending) {
+      if (s.status !== 'pending') {
+        try { syncSlipToDb(s); } catch (_) {}
+      }
+    }
+  }
   return { checked: pending.length, boomed: boomedCount, lost: lostCount };
 }
 

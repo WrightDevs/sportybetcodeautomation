@@ -23,6 +23,7 @@
     "ping": "node bin/sb.js --ping"
   },
   "dependencies": {
+    "mongodb": "^7.8.0",
     "pg": "^8.23.1"
   }
 }

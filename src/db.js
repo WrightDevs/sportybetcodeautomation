@@ -10,30 +10,83 @@ const SLIPS_FILE = path.join(DATA_DIR, 'slips.json');
 // Ensure local directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Check for PostgreSQL (Render Postgres, Neon, Supabase connection string, or Railway)
-const DATABASE_URL = process.env.DATABASE_URL || '';
+// Environment credentials for databases
+const RAW_DB_URL = process.env.DATABASE_URL || '';
+const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URL || (RAW_DB_URL.startsWith('mongodb') ? RAW_DB_URL : '');
+const POSTGRES_URL = RAW_DB_URL.startsWith('postgres') ? RAW_DB_URL : '';
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+
+// In-memory cache for sub-millisecond lookups
+const subCache = new Map(); // chatId -> { expiresAt, updatedAt, meta }
+
+let mongoClient = null;
+let mongoDb = null;
+let subscribersCol = null;
+let slipsCol = null;
+let isMongoReady = false;
 
 let pgPool = null;
 let isPgReady = false;
 
-// In-memory cache for ultra-fast lookups
-const subCache = new Map(); // chatId -> { expiresAt, updatedAt, meta }
+// ----------------------------------------------------
+// 1. MongoDB Initialization (Top Priority)
+// ----------------------------------------------------
+if (MONGO_URI) {
+  try {
+    const { MongoClient } = require('mongodb');
+    mongoClient = new MongoClient(MONGO_URI, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000
+    });
+
+    (async () => {
+      try {
+        await mongoClient.connect();
+        const dbName = process.env.MONGO_DB_NAME || 'sportybet';
+        mongoDb = mongoClient.db(dbName);
+        subscribersCol = mongoDb.collection('subscribers');
+        slipsCol = mongoDb.collection('slips');
+
+        // Ensure indices for performance
+        await subscribersCol.createIndex({ chatId: 1 }, { unique: true }).catch(() => {});
+        await slipsCol.createIndex({ shareCode: 1 }).catch(() => {});
+        await slipsCol.createIndex({ userId: 1 }).catch(() => {});
+
+        isMongoReady = true;
+        console.log(`✅ MongoDB connected successfully to database: "${dbName}"`);
+
+        // Warm up in-memory cache from MongoDB
+        const cursor = subscribersCol.find({});
+        for await (const doc of cursor) {
+          subCache.set(String(doc.chatId), {
+            chatId: String(doc.chatId),
+            expiresAt: Number(doc.expiresAt),
+            updatedAt: Number(doc.updatedAt),
+            ...doc.meta
+          });
+        }
+      } catch (err) {
+        console.error('MongoDB connection error, falling back to local storage:', err.message);
+      }
+    })();
+  } catch (err) {
+    console.warn('MongoDB client initialization failed:', err.message);
+  }
+}
 
 // ----------------------------------------------------
-// 1. PostgreSQL Initialization
+// 2. PostgreSQL Initialization (Secondary)
 // ----------------------------------------------------
-if (DATABASE_URL) {
+if (!MONGO_URI && POSTGRES_URL) {
   try {
     const { Pool } = require('pg');
     pgPool = new Pool({
-      connectionString: DATABASE_URL,
-      ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
+      connectionString: POSTGRES_URL,
+      ssl: POSTGRES_URL.includes('localhost') ? false : { rejectUnauthorized: false },
       connectionTimeoutMillis: 5000
     });
 
-    // Auto-create required tables if they don't exist yet
     (async () => {
       try {
         const client = await pgPool.connect();
@@ -44,7 +97,6 @@ if (DATABASE_URL) {
             updated_at BIGINT NOT NULL,
             meta JSONB DEFAULT '{}'::jsonb
           );
-
           CREATE TABLE IF NOT EXISTS slips (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -60,9 +112,8 @@ if (DATABASE_URL) {
         `);
         client.release();
         isPgReady = true;
-        console.log('✅ PostgreSQL database connected and tables initialized');
+        console.log('✅ PostgreSQL connected and initialized');
 
-        // Warm up cache from Postgres
         const res = await pgPool.query('SELECT * FROM subscribers');
         for (const row of res.rows) {
           subCache.set(String(row.chat_id), {
@@ -73,16 +124,16 @@ if (DATABASE_URL) {
           });
         }
       } catch (e) {
-        console.error('PostgreSQL connection error, falling back to local storage:', e.message);
+        console.error('PostgreSQL connection error:', e.message);
       }
     })();
   } catch (e) {
-    console.warn('pg package initialization failed, falling back:', e.message);
+    console.warn('PostgreSQL pool init failed:', e.message);
   }
 }
 
 // ----------------------------------------------------
-// 2. Local File Helpers (Fallback)
+// 3. Local File Helpers (Safety Fallback)
 // ----------------------------------------------------
 function loadLocalSubscribers() {
   try {
@@ -99,24 +150,40 @@ function saveLocalSubscribers(db) {
   } catch (_) {}
 }
 
-// Warm up in-memory cache from local file
+// Warm up local cache
 const localData = loadLocalSubscribers();
 for (const [id, data] of Object.entries(localData)) {
   subCache.set(String(id), data);
 }
 
 // ----------------------------------------------------
-// 3. Database Operations (Universal API)
+// 4. Universal Operations (Subscribers)
 // ----------------------------------------------------
 
 async function getSubscriber(chatId) {
   const id = String(chatId);
-  // Check memory cache first for instant lookup
   if (subCache.has(id)) {
     return subCache.get(id);
   }
 
-  // If Postgres is active, query Postgres
+  // 1. MongoDB
+  if (isMongoReady && subscribersCol) {
+    try {
+      const doc = await subscribersCol.findOne({ chatId: id });
+      if (doc) {
+        const data = {
+          chatId: id,
+          expiresAt: Number(doc.expiresAt),
+          updatedAt: Number(doc.updatedAt),
+          ...(doc.meta || {})
+        };
+        subCache.set(id, data);
+        return data;
+      }
+    } catch (_) {}
+  }
+
+  // 2. PostgreSQL
   if (isPgReady && pgPool) {
     try {
       const res = await pgPool.query('SELECT * FROM subscribers WHERE chat_id = $1 LIMIT 1', [id]);
@@ -134,7 +201,7 @@ async function getSubscriber(chatId) {
     } catch (_) {}
   }
 
-  // Fallback to Supabase REST if configured
+  // 3. Supabase REST
   if (SUPABASE_URL && SUPABASE_KEY) {
     try {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.${encodeURIComponent(id)}&select=*`, {
@@ -167,15 +234,28 @@ async function saveSubscriber(chatId, expiresAt, meta = {}) {
     ...meta
   };
 
-  // 1. Update in-memory cache
+  // 1. In-memory
   subCache.set(id, data);
 
-  // 2. Always write to local JSON as safety backup
+  // 2. Local File backup
   const local = loadLocalSubscribers();
   local[id] = data;
   saveLocalSubscribers(local);
 
-  // 3. If Postgres is active, write to Postgres
+  // 3. MongoDB
+  if (isMongoReady && subscribersCol) {
+    try {
+      await subscribersCol.updateOne(
+        { chatId: id },
+        { $set: { chatId: id, expiresAt: data.expiresAt, updatedAt: data.updatedAt, meta } },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error('Failed to save subscriber to MongoDB:', e.message);
+    }
+  }
+
+  // 4. PostgreSQL
   if (isPgReady && pgPool) {
     try {
       await pgPool.query(`
@@ -187,11 +267,11 @@ async function saveSubscriber(chatId, expiresAt, meta = {}) {
           meta = EXCLUDED.meta
       `, [id, data.expiresAt, data.updatedAt, JSON.stringify(meta)]);
     } catch (e) {
-      console.error('Failed to save subscriber to Postgres:', e.message);
+      console.error('Failed to save subscriber to PostgreSQL:', e.message);
     }
   }
 
-  // 4. If Supabase REST is active, upsert to Supabase
+  // 5. Supabase REST
   if (SUPABASE_URL && SUPABASE_KEY) {
     try {
       await fetch(`${SUPABASE_URL}/rest/v1/subscribers`, {
@@ -223,10 +303,12 @@ async function removeSubscriber(chatId) {
   delete local[id];
   saveLocalSubscribers(local);
 
+  if (isMongoReady && subscribersCol) {
+    try { await subscribersCol.deleteOne({ chatId: id }); } catch (_) {}
+  }
+
   if (isPgReady && pgPool) {
-    try {
-      await pgPool.query('DELETE FROM subscribers WHERE chat_id = $1', [id]);
-    } catch (_) {}
+    try { await pgPool.query('DELETE FROM subscribers WHERE chat_id = $1', [id]); } catch (_) {}
   }
 
   if (SUPABASE_URL && SUPABASE_KEY) {
@@ -241,9 +323,28 @@ async function removeSubscriber(chatId) {
   return true;
 }
 
+// ----------------------------------------------------
+// 5. Universal Operations (Slips for Analytics)
+// ----------------------------------------------------
+
+async function syncSlipToDb(slip) {
+  if (isMongoReady && slipsCol) {
+    try {
+      await slipsCol.updateOne(
+        { id: slip.id },
+        { $set: slip },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error('Failed to sync slip to MongoDB:', e.message);
+    }
+  }
+}
+
 module.exports = {
   getSubscriber,
   saveSubscriber,
   removeSubscriber,
+  syncSlipToDb,
   subCache
 };
