@@ -415,33 +415,30 @@ Imminent whistle       Leader or 1st Half                  Imminent FT whistle  
 into half-time break.  favourite lock.                     into full time.       • Virtual ➔ Fav / Cushion
 ```
 
-#### Rule 1: 41 Minutes to Half Time → Dynamic Under Line (38.0′ – 42.5′, Active H1)
-- **Clock Window:** 38.0′ – 42.5′ (Must be active `H1`, with 3 to 7 virtual minutes / ~60–120 real seconds of staking buffer before HT whistle).
-- **Target Line:** `Under (Current Goals + 0.5)` in Market `68` (`1st Half - Over/Under`):
-  - Score is `0-0` (0 goals) ➔ **Under 0.5 HT**
-  - Score is `1-0` or `0-1` (1 goal) ➔ **Under 1.5 HT**
-  - Score is `1-1` or `2-0` (2 goals) ➔ **Under 2.5 HT**
-- **Reasoning:** In virtual football, closing minutes of the 1st half have virtually no goal conversion. Under `(goals + 0.5)` has an overwhelmingly safe completion rate right before the halftime break.
+#### Rule 1: Half Time Sniper → Handicap Priority with Dynamic Under Fallback (40.0′ – 42.5′, Active H1)
+- **Clock Window:** 40.0′ – 42.5′ (Must be active `H1`, starting from minute 40 with safe staking buffer before HT whistle).
+- **Target Logic:**
+  - **Priority 1 (Handicap):** Checks Market `65` (1st Half Handicap) or Market `14` (FT Handicap) for active lines providing a $\ge 1$ goal cushion within odds band (`1.01` – `1.35`).
+  - **Priority 2 (O/U Fallback):** If handicap unavailable, falls back to `Under (Current Goals + 0.5)` in Market `68` (`1st Half - Over/Under`).
+- **Reasoning:** In virtual football, closing minutes of the 1st half have virtually no goal conversion. Starting at 40.0′ gives the user the ideal staking window before the halftime whistle.
 
-#### Rule 2: 43 Minutes → 1st Half Winner or 1st Half Draw (40.0′ – 43.5′, Active H1)
-- **Clock Window:** 40.0′ – 43.5′ (Must be active `H1`, preserving buffer before half-time).
+#### Rule 2: 41 Minutes → 1st Half Winner or 1st Half Draw (40.0′ – 43.0′, Active H1)
+- **Clock Window:** 40.0′ – 43.0′ (Must be active `H1`, preserving buffer before half-time).
 - **Market Targeted:** Market `60` (`1st Half - 1X2`).
 - **Selection:**
   - **Tied game (e.g. `0-0`, `1-1`):** Selects **1st Half Draw (X)**. Whistle is imminent and game will reach the break level.
   - **Team leading (e.g. `1-0`, `0-1`):** Selects **1st Half Winner** on the leading team.
 - **Reasoning:** Locks in the 1st Half result with safe time remaining before the referee sounds the halftime whistle.
 
-#### Rule 3: 85 Minutes to Full Time → Dynamic FT Under (81.0′ – 85.5′, Active H2)
-- **Clock Window:** 81.0′ – 85.5′ (Must be active `H2`, with 5 to 9 virtual minutes / ~100–180 real seconds of staking buffer before full-time whistle).
-- **Target Line:** `Under (Current Goals + 0.5)` in Market `18` (`Full Time Over/Under`):
-  - Score is `0-0` ➔ **Under 0.5 FT**
-  - Score is `1-0` or `0-1` ➔ **Under 1.5 FT**
-  - Score is `1-1` or `2-0` ➔ **Under 2.5 FT**
-  - Score is `2-1` or `3-0` ➔ **Under 3.5 FT**
-- **Reasoning:** With the match entering its closing stretch, scoring is heavily suppressed, securing a high-probability Under exit while leaving ample time for the user to open and confirm the booking slip.
+#### Rule 3: Full Time Sniper → Handicap Priority with Dynamic FT Under Fallback (83.0′ – 85.5′, Active H2)
+- **Clock Window:** 83.0′ – 85.5′ (Must be active `H2`, starting from minute 83 with safe staking buffer before full-time whistle).
+- **Target Logic:**
+  - **Priority 1 (Handicap):** Checks Market `14` (Handicap lines `hcp=1:0`, `hcp=2:0`, `hcp=0:1`, `hcp=0:2`, `hcp=3:0`) for active lines providing a $\ge 1$ goal cushion within odds band (`1.01` – `1.35`).
+  - **Priority 2 (O/U Fallback):** If handicap unavailable, falls back to `Under (Current Goals + 0.5)` in Market `18` (`Full Time Over/Under`).
+- **Reasoning:** With the match entering its closing stretch from minute 83, starting at 83.0′ gives users plenty of breathing space to stake before final whistle settlement.
 
-#### Rule 4: 88 Minutes to Full Time → FT Draw, 1X2 Winner, or Handicap (83.0′ – 86.5′, Active H2)
-- **Clock Window:** 83.0′ – 86.5′ (Must be active `H2`).
+#### Rule 4: Full Time Draw, 1X2 Winner, or Handicap (83.0′ – 86.0′, Active H2)
+- **Clock Window:** 83.0′ – 86.0′ (Must be active `H2`).
 - **Lead-Based Logic:**
   - **Tied game (e.g. `0-0`, `1-1`, `2-2`):** Selects **Full Time Draw (X)** in Market `1`.
   - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team. A 2-goal deficit cannot be overturned.
@@ -643,7 +640,7 @@ export function QuestSpecialWidget({ userId }: { userId: string }) {
       </div>
 
       <p className="text-sm text-gray-300 mb-4">
-        Background sniper targeting vFootball matches at 38′ (HT O/U) and 80′ (Late Match / Handicap). Mints a single-leg code the second criteria are met.
+        Background sniper targeting vFootball matches at 40′ (HT Handicap & O/U) and 83′ (FT Handicap & O/U). Mints a single-leg code the second criteria are met with ample staking breathing space.
       </p>
 
       {result && (

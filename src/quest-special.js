@@ -171,12 +171,12 @@ function checkHandicap(ev, min, sc, isHT) {
   return null;
 }
 
-// ── Timing Rule 1: 41′ HT (Window: 38′ – 42.5′, must be H1) ──
+// ── Timing Rule 1: 41′ HT (Window: 40.0′ – 42.5′, must be H1) ──
 // Priority 1: Handicap (Market 65 / Market 14)
 // Priority 2: Over/Under Fallback (Market 68 / Market 18)
 function checkHT(ev, min, sc) {
-  // Guard: must be in active first half with safe buffer before half-time whistle
-  if (ev.matchStatus !== 'H1' || min < 38.0 || min > 42.5) return null;
+  // Guard: must be in active first half starting from 40min with safe staking buffer before half-time whistle
+  if (ev.matchStatus !== 'H1' || min < 40.0 || min > 42.5) return null;
 
   // 1st Priority: Handicap
   const hcap = checkHandicap(ev, min, sc, true);
@@ -245,9 +245,9 @@ function checkHTUnderFallback(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 2: 43′ H1 Result / Draw (Window: 40′ – 43.5′, must be H1) ──
+// ── Timing Rule 2: 41′ H1 Result / Draw (Window: 40.0′ – 43.0′, must be H1) ──
 function checkHTResult(ev, min, sc) {
-  if (ev.matchStatus !== 'H1' || min < 40.0 || min > 43.5) return null;
+  if (ev.matchStatus !== 'H1' || min < 40.0 || min > 43.0) return null;
 
   const isTied = sc.h === sc.a;
   const homeLeads = sc.h > sc.a;
@@ -300,12 +300,12 @@ function checkHTResult(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 3: 85′ FT (Window: 81′ – 85.5′, must be H2) ──
+// ── Timing Rule 3: 85′ FT (Window: 83.0′ – 85.5′, must be H2) ──
 // Priority 1: Handicap (Market 14)
 // Priority 2: Over/Under Fallback (Market 18)
 function checkFT(ev, min, sc) {
-  // Guard: must be in active second half with safe buffer before full-time whistle
-  if (ev.matchStatus !== 'H2' || min < 81.0 || min > 85.5) return null;
+  // Guard: must be in active second half starting from 83min with safe staking buffer before full-time whistle
+  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 85.5) return null;
 
   // 1st Priority: Handicap
   const hcap = checkHandicap(ev, min, sc, false);
@@ -348,9 +348,9 @@ function checkFTUnderFallback(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 4: 88′ FT Draw / Late Lead / Handicap (Window: 83′ – 86.5′, must be H2) ──
+// ── Timing Rule 4: 85′ FT Draw / Late Lead / Handicap (Window: 83.0′ – 86.0′, must be H2) ──
 function checkFTResult(ev, min, sc) {
-  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 86.5) return null;
+  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 86.0) return null;
 
   const margin = Math.abs(sc.h - sc.a);
   const isTied = sc.h === sc.a;
@@ -541,9 +541,9 @@ async function scanQuestSpecial(userId = 'community') {
     const sc = scoreOf(rawEv);
     if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
 
-    // Check if within any buffered sniper window
-    const inHT = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.5;
-    const inFT = rawEv.matchStatus === 'H2' && min >= 81.0 && min <= 86.5;
+    // Check if within any buffered sniper window (40.0′-43.0′ HT, 83.0′-86.0′ FT)
+    const inHT = rawEv.matchStatus === 'H1' && min >= 40.0 && min <= 43.0;
+    const inFT = rawEv.matchStatus === 'H2' && min >= 83.0 && min <= 86.0;
     if (!inHT && !inFT) continue;
 
     const ev = await enrichEventMarkets(rawEv);
