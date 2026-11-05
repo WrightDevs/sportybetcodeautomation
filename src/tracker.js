@@ -92,11 +92,28 @@ function evaluateLeg(leg, eventData) {
   const isEnded = eventData.status === 2 || eventData.matchStatus === 'ended' || eventData.matchStatus === 'finished';
   if (!isEnded) return { settled: false };
 
-  const homeScore = Number(eventData.homeScore ?? eventData.setScore?.split(':')[0]);
-  const awayScore = Number(eventData.awayScore ?? eventData.setScore?.split(':')[1]);
+  let homeScore = Number(eventData.homeScore ?? eventData.setScore?.split(':')[0]);
+  let awayScore = Number(eventData.awayScore ?? eventData.setScore?.split(':')[1]);
 
   if (isNaN(homeScore) || isNaN(awayScore)) {
     return { settled: false };
+  }
+
+  // Exact settlement by marketId/outcomeId (same predicates the selector prices with).
+  // 1st-half markets (60/63/65/68) settle on the half-time score = gameScore[0].
+  const midRaw = String(leg.marketId || '');
+  if (midRaw && leg.outcomeId) {
+    const { legPredicate } = require('./selection/model');
+    const pred = legPredicate({ marketId: midRaw, outcomeId: String(leg.outcomeId), specifier: leg.specifier });
+    if (pred) {
+      let h = homeScore, a = awayScore;
+      if (['60', '63', '65', '68'].includes(midRaw)) {
+        const m = /^(\d+):(\d+)$/.exec(String((eventData.gameScore || [])[0] || ''));
+        if (!m) return { settled: false };
+        h = Number(m[1]); a = Number(m[2]);
+      }
+      return { settled: true, won: !!pred(h, a), score: `${h}:${a}` };
+    }
   }
 
   const scoreStr = `${homeScore}:${awayScore}`;
@@ -157,7 +174,7 @@ function evaluateLeg(leg, eventData) {
   // 5. GG/NG (Market 29) & Team Under 0.5 (Market 19/20)
   if (mid === '29' || desc.toLowerCase().includes('both teams') || desc.toLowerCase().includes('gg')) {
     const outId = String(leg.outcomeId || '');
-    const isNo = outId === '30' || desc.toLowerCase().includes('no');
+    const isNo = outId === '76' || outId === '30' || desc.toLowerCase().includes('no');
     if (isNo) {
       const won = (homeScore === 0 || awayScore === 0);
       return { settled: true, won, score: scoreStr };

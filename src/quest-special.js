@@ -4,9 +4,16 @@ const { sleep } = require('./util');
 const { recordSlip } = require('./tracker');
 const { getQuestUsage, incrementQuestUsage } = require('./db');
 const { isAdmin } = require('./subs');
+const { MARKET_WINDOW, SELECTION } = require('./selection/config');
+const { selectSlip, applyVeto } = require('./selection/safeSelector');
+const { vetoLegs } = require('./selection/veto');
+const { logSlip } = require('./selection/log');
+
+const WINDOW_SPAN = SELECTION.WINDOW_SPAN;
+let lastNoSafe = null; // most recent "no safe slip" explanation (for status/timeouts)
 
 // ── Configuration & Headers ────────────────────────────
-const CC = (CFG.REGION || 'gh').toLowerCase();
+const CC = (CFG.REGION || 'ng').toLowerCase();
 const SPORT = 'sr:sport:202120001';
 const MARKETS = '1,10,14,18,19,20,29,60,63,65,68';
 
@@ -293,10 +300,11 @@ function checkNoGGCandidates(ev, min, sc, isHT) {
   // Only valid if at least one team currently has 0 goals (clean sheet active)
   if (sc.h !== 0 && sc.a !== 0) return candidates;
 
-  // Market 29 (GG/NG / Both Teams to Score): Outcome 30 is "No" (NG)
+  // Market 29 (GG/NG / Both Teams to Score): outcome 74 = Yes, 76 = No (NG).
+  // (Verified on live factsCenter output; the old id '30' never matched.)
   const m29 = getMarkets(ev, '29')[0];
   if (m29) {
-    const match = getOutcome(m29, '30');
+    const match = getOutcome(m29, '76');
     if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
       const zeroTeam = sc.h === 0 ? ev.homeTeamName : ev.awayTeamName;
       candidates.push({
@@ -305,7 +313,7 @@ function checkNoGGCandidates(ev, min, sc, isHT) {
         type: isHT ? 'ht_nogg' : 'ft_nogg',
         marketId: '29',
         specifier: '',
-        outcomeId: '30',
+        outcomeId: '76',
         odds: match.odds,
         description: `${stagePrefix} Both Teams To Score - NO (No GG) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
         reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${zeroTeam} has not scored — No GG backed by remaining time buffer.`,
@@ -317,7 +325,7 @@ function checkNoGGCandidates(ev, min, sc, isHT) {
 
   // Market 19 (Home Team O/U) when Home has 0: Home Under 0.5
   if (sc.h === 0) {
-    const m19 = (ev.markets || []).find(m => m.id === '19' && m.specifier === 'total=0.5');
+    const m19 = getMarkets(ev, '19').find(m => m.specifier === 'total=0.5');
     if (m19) {
       const match = getOutcome(m19, '13'); // Outcome 13 = Under
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
@@ -340,7 +348,7 @@ function checkNoGGCandidates(ev, min, sc, isHT) {
 
   // Market 20 (Away Team O/U) when Away has 0: Away Under 0.5
   if (sc.a === 0) {
-    const m20 = (ev.markets || []).find(m => m.id === '20' && m.specifier === 'total=0.5');
+    const m20 = getMarkets(ev, '20').find(m => m.specifier === 'total=0.5');
     if (m20) {
       const match = getOutcome(m20, '13'); // Outcome 13 = Under
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
@@ -534,62 +542,39 @@ async function fetchLiveVFootball(tries = 3) {
 }
 
 // ── Event Candidate Selector ───────────────────────────────
+// Generates every candidate leg for the stage (no ordering: ranking is done by the safe selector).
 function getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode) {
   let candidates = [];
   const absDiff = Math.abs(sc.h - sc.a);
+  const isHT = !!inH1;
+  if (!inH1 && !inH2) return candidates;
 
   if (normalizedMode === 'handicap' || normalizedMode === 'hcap') {
-    if (inH1) {
-      candidates = checkHandicapCandidates(ev, min, sc, true);
-    } else if (inH2 && min >= 75.0 && min <= 84.0) {
-      candidates = checkHandicapCandidates(ev, min, sc, false);
-      // User Decision Rule: When a team leads by 3+ goals and safe 4:0+ handicap is unavailable,
-      // fallback to the safest market: No GG (Both Teams to Score - NO)
-      if (candidates.length === 0 && absDiff >= 3) {
-        candidates = checkNoGGCandidates(ev, min, sc, false);
-      }
+    candidates = checkHandicapCandidates(ev, min, sc, isHT);
+    // User Decision Rule: when a team leads by 3+ goals and a safe 4:0+ handicap is unavailable,
+    // fall back to No GG (Both Teams to Score - NO).
+    if (candidates.length === 0 && absDiff >= 3 && !isHT) {
+      candidates = checkNoGGCandidates(ev, min, sc, false);
     }
   } else if (normalizedMode === 'ou' || normalizedMode === 'over_under' || normalizedMode === 'under') {
-    if (inH1) {
-      candidates = checkUnderCandidates(ev, min, sc, true);
-    } else if (inH2 && min >= 75.0) {
-      candidates = checkUnderCandidates(ev, min, sc, false);
-    }
+    candidates = checkUnderCandidates(ev, min, sc, isHT);
   } else {
-    // Mode === 'any' (Safest available qualifying market)
-    if (inH1) {
-      candidates = [
-        ...checkHandicapCandidates(ev, min, sc, true),
-        ...checkUnderCandidates(ev, min, sc, true),
-        ...checkNoGGCandidates(ev, min, sc, true),
-        ...checkResultCandidates(ev, min, sc, true)
-      ];
-    } else if (inH2 && min >= 75.0) {
-      if (absDiff >= 3) {
-        // When a team leads by 3+ goals (e.g. 0-3 or 3-0):
-        // Safest order: 1) No GG, 2) Safe 4:0+ handicap, 3) Safe Under
-        candidates = [
-          ...checkNoGGCandidates(ev, min, sc, false),
-          ...checkHandicapCandidates(ev, min, sc, false),
-          ...checkUnderCandidates(ev, min, sc, false)
-        ];
-      } else if (min <= 82.0) {
-        candidates = [
-          ...checkHandicapCandidates(ev, min, sc, false),
-          ...checkUnderCandidates(ev, min, sc, false),
-          ...checkNoGGCandidates(ev, min, sc, false)
-        ];
-      } else {
-        candidates = [
-          ...checkUnderCandidates(ev, min, sc, false),
-          ...checkNoGGCandidates(ev, min, sc, false),
-          ...checkHandicapCandidates(ev, min, sc, false),
-          ...checkResultCandidates(ev, min, sc, false)
-        ];
-      }
-    }
+    candidates = [
+      ...checkHandicapCandidates(ev, min, sc, isHT),
+      ...checkUnderCandidates(ev, min, sc, isHT),
+      ...checkNoGGCandidates(ev, min, sc, isHT),
+      ...checkResultCandidates(ev, min, sc, isHT)
+    ];
   }
   return candidates;
+}
+
+// Stage gate derived from the single MARKET_WINDOW config (HT 40 / FT 80 +/- span).
+function stageOf(ev, min) {
+  const [h0, h1] = WINDOW_SPAN.HT, [f0, f1] = WINDOW_SPAN.FT;
+  const inH1 = ev.matchStatus === 'H1' && min >= MARKET_WINDOW.HT + h0 && min <= MARKET_WINDOW.HT + h1;
+  const inH2 = ev.matchStatus === 'H2' && min >= MARKET_WINDOW.FT + f0 && min <= MARKET_WINDOW.FT + f1;
+  return { inH1, inH2, stage: inH1 ? 'HT' : inH2 ? 'FT' : null };
 }
 
 // ── Minting Live Booking Slips (Single & Multi-Leg) ─────────
@@ -633,7 +618,7 @@ async function mintLiveBooking(legOrLegs, tries = 2) {
   return { err: 'Minting failed' };
 }
 
-// ── Scan with Strategy Mode, Multi-Legs & Live Mint Verification ─
+// ── Scan: safe selector over all in-window live events ─────
 async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs = 1) {
   pruneFired();
   const normalizedMode = String(mode || 'any').toLowerCase().trim();
@@ -642,187 +627,95 @@ async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs =
   const events = await fetchLiveVFootball();
   if (!events.length) return null;
 
-  // Single-Leg Sniper Mode
-  if (legsNeeded === 1) {
-    for (const rawEv of events) {
-      const min = minute(rawEv.playedSeconds);
-      const sc = scoreOf(rawEv);
-      if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
-
-      const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
-      const inH2 = rawEv.matchStatus === 'H2' && min >= 75.0 && min <= 86.0;
-      if (!inH1 && !inH2) continue;
-
-      const ev = await enrichEventMarkets(rawEv);
-      const candidates = getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode);
-      if (!candidates || !candidates.length) continue;
-
-      for (const cand of candidates) {
-        const fk = `${ev.eventId}:${cand.marketId}:${cand.specifier || 'none'}:${cand.outcomeId}`;
-        if (fired.has(fk)) continue;
-
-        const leg = {
-          id: ev.eventId,
-          marketId: cand.marketId,
-          specifier: cand.specifier || '',
-          outcomeId: cand.outcomeId,
-          odds: cand.odds,
-          home: ev.homeTeamName,
-          away: ev.awayTeamName
-        };
-
-        const booking = await mintLiveBooking(leg);
-        if (booking && booking.code) {
-          fired.set(fk, Date.now());
-
-          // Record to stats tracker with isQuestSpecial: true
-          try {
-            recordSlip({
-              userId: String(userId || 'community'),
-              code: booking.code,
-              sport: 'quest_special',
-              totalOdds: cand.odds,
-              legs: [{
-                id: ev.eventId,
-                home: ev.homeTeamName,
-                away: ev.awayTeamName,
-                league: ev.league || 'vFootball',
-                marketId: cand.marketId,
-                outcomeDesc: cand.description,
-                outcomeId: cand.outcomeId,
-                specifier: cand.specifier || '',
-                odds: cand.odds
-              }],
-              url: booking.url,
-              isQuestSpecial: true
-            });
-          } catch (_) {}
-
-          return {
-            isMultiLeg: false,
-            eventId: ev.eventId,
-            home: ev.homeTeamName,
-            away: ev.awayTeamName,
-            league: ev.league || 'vFootball',
-            minute: Math.round(min),
-            homeScore: sc.h,
-            awayScore: sc.a,
-            mode: normalizedMode,
-            analysis: cand,
-            code: booking.code,
-            url: booking.url,
-            mintError: null,
-            timestamp: Date.now()
-          };
-        }
-      }
-    }
-    return null;
-  }
-
-  // Multi-Leg Accumulator Mode (targetLegs > 1, e.g. 5 legs)
-  const gathered = [];
-  const seenEventIds = new Set();
-
+  // Step A: candidate pool - live, clock+score known, inside the firing window, active markets
+  const pool = [];
   for (const rawEv of events) {
-    if (seenEventIds.has(rawEv.eventId)) continue;
-
     const min = minute(rawEv.playedSeconds);
     const sc = scoreOf(rawEv);
-    if (min == null || !sc) continue;
-
-    const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
-    const inH2 = rawEv.matchStatus === 'H2' && min >= 75.0 && min <= 86.0;
-    if (!inH1 && !inH2) continue;
-
+    if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
+    const { inH1, inH2, stage } = stageOf(rawEv, min);
+    if (!stage) continue;
     const ev = await enrichEventMarkets(rawEv);
-    const candidates = getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode);
-    if (!candidates || !candidates.length) continue;
+    pool.push({ ev, minute: min, score: sc, stage, inH1, inH2 });
+  }
+  if (!pool.length) return null;
 
-    // Pick best non-fired candidate for this event
-    for (const cand of candidates) {
-      const fk = `${ev.eventId}:${cand.marketId}:${cand.specifier || 'none'}:${cand.outcomeId}`;
-      if (fired.has(fk)) continue;
-
-      const leg = {
-        id: ev.eventId,
-        marketId: cand.marketId,
-        specifier: cand.specifier || '',
-        outcomeId: cand.outcomeId,
-        odds: cand.odds,
-        home: ev.homeTeamName,
-        away: ev.awayTeamName
-      };
-
-      gathered.push({ ev, min, sc, cand, fk, leg });
-      seenEventIds.add(ev.eventId);
-      break; // Only 1 leg per match in accumulator
+  const deps = {
+    getMarkets,
+    generateCandidates: (ev, min, sc, stage) => {
+      const all = getCandidatesForEvent(ev, min, sc, stage === 'HT', stage === 'FT', normalizedMode);
+      return all.filter(c => !fired.has(`${ev.eventId}:${c.marketId}:${c.specifier || 'none'}:${c.outcomeId}`));
     }
+  };
 
-    if (gathered.length >= legsNeeded) break;
+  // Steps B-E (deterministic)
+  let selection = selectSlip(pool, { legs: legsNeeded, isVirtual: true }, deps);
+
+  // Step F: LLM veto (multi-leg only, time-boxed, fail-open, drop-only)
+  if (selection.ok && legsNeeded > 1) {
+    const verdicts = await vetoLegs(selection.legs);
+    selection = applyVeto(selection, verdicts);
   }
 
-  if (gathered.length < legsNeeded) {
-    return null;
+  if (!selection.ok) {
+    lastNoSafe = { timestamp: Date.now(), reasons: selection.reasons || [], considered: selection.candidatesConsidered || 0 };
+    return null; // "no safe slip" - keep scanning, never lower the bar
   }
 
-  const selectedLegs = gathered.slice(0, legsNeeded);
-  const booking = await mintLiveBooking(selectedLegs.map(g => g.leg));
+  const chosen = selection.legs;
+  const booking = await mintLiveBooking(chosen.map(l => ({
+    id: l.eventId, marketId: l.marketId, specifier: l.specifier, outcomeId: l.outcomeId
+  })));
+  if (!booking || !booking.code) return null;
 
-  if (booking && booking.code) {
-    for (const item of selectedLegs) {
-      fired.set(item.fk, Date.now());
-    }
+  for (const l of chosen) fired.set(`${l.eventId}:${l.marketId}:${l.specifier || 'none'}:${l.outcomeId}`, Date.now());
+  logSlip({ code: booking.code, mode: normalizedMode, legs: chosen, jointProb: selection.jointProb, totalOdds: selection.totalOdds });
 
-    const totalOdds = Number(selectedLegs.reduce((acc, item) => acc * item.cand.odds, 1).toFixed(2));
-
-    try {
-      recordSlip({
-        userId: String(userId || 'community'),
-        code: booking.code,
-        sport: 'quest_special',
-        totalOdds,
-        legs: selectedLegs.map(item => ({
-          id: item.ev.eventId,
-          home: item.ev.homeTeamName,
-          away: item.ev.awayTeamName,
-          league: item.ev.league || 'vFootball',
-          marketId: item.cand.marketId,
-          outcomeDesc: item.cand.description,
-          outcomeId: item.cand.outcomeId,
-          specifier: item.cand.specifier || '',
-          odds: item.cand.odds
-        })),
-        url: booking.url,
-        isQuestSpecial: true
-      });
-    } catch (_) {}
-
-    return {
-      isMultiLeg: true,
-      legsCount: selectedLegs.length,
-      totalOdds,
+  try {
+    recordSlip({
+      userId: String(userId || 'community'),
       code: booking.code,
+      sport: 'quest_special',
+      totalOdds: selection.totalOdds,
+      legs: chosen.map(l => ({
+        id: l.eventId, home: l.home, away: l.away, league: l.league || 'vFootball',
+        marketId: l.marketId, outcomeDesc: l.description, outcomeId: l.outcomeId,
+        specifier: l.specifier || '', odds: l.odds
+      })),
       url: booking.url,
+      isQuestSpecial: true
+    });
+  } catch (_) {}
+
+  const shape = l => ({
+    eventId: l.eventId, home: l.home, away: l.away, league: l.league || 'vFootball',
+    minute: Math.round(l.minute), homeScore: l.scoreH, awayScore: l.scoreA,
+    analysis: { ...l.analysis, prob: l.prob, safetyScore: l.score },
+    odds: l.odds, description: l.description, reasoning: l.reasoning,
+    prob: l.prob, safetyScore: l.score
+  });
+
+  if (legsNeeded === 1) {
+    const l = chosen[0];
+    return {
+      isMultiLeg: false,
+      ...shape(l),
       mode: normalizedMode,
-      timestamp: Date.now(),
-      legs: selectedLegs.map(item => ({
-        eventId: item.ev.eventId,
-        home: item.ev.homeTeamName,
-        away: item.ev.awayTeamName,
-        league: item.ev.league || 'vFootball',
-        minute: Math.round(item.min),
-        homeScore: item.sc.h,
-        awayScore: item.sc.a,
-        analysis: item.cand,
-        odds: item.cand.odds,
-        description: item.cand.description,
-        reasoning: item.cand.reasoning
-      }))
+      code: booking.code, url: booking.url, mintError: null,
+      jointProb: selection.jointProb,
+      timestamp: Date.now()
     };
   }
-
-  return null;
+  return {
+    isMultiLeg: true,
+    legsCount: chosen.length,
+    totalOdds: selection.totalOdds,
+    jointProb: selection.jointProb,
+    code: booking.code, url: booking.url,
+    mode: normalizedMode,
+    timestamp: Date.now(),
+    legs: chosen.map(shape)
+  };
 }
 
 // ── Session Management (Telegram & Web Polling) ────────
@@ -949,6 +842,10 @@ module.exports = {
   getDailyCount,
   incrementDailyCount,
   isUnlimitedUser,
+  getLastNoSafe: () => lastNoSafe,
+  stageOf,
+  getMarkets,
+  getCandidatesForEvent,
   minute,
   scoreOf,
   MAX_DAILY

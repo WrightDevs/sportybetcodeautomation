@@ -77,7 +77,7 @@ function getPaywallMenu() {
 
 const HELP = `<b>SportyBet Daily Codes VIP</b>\n\n`
   + `Select an option below:\n\n`
-  + `• <b>Quest Special</b> — live in-play (Handicap with O/U fallback)\n`
+  + `• <b>Quest Special</b> — live in-play sniper signals\n`
   + `• <b>Football</b> — real fixtures accumulator\n`
   + `• <b>eFootball</b> — in-play leader\n`
   + `• <b>vFootball</b> — live virtual matches`;
@@ -256,8 +256,8 @@ async function handleQuestSpecial(chat, forcedOptions = null) {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '1-Leg Mix', callback_data: 'qs_1_any' },
-          { text: '5-Leg Mix', callback_data: 'qs_5_any' }
+          { text: '1-Game Mix', callback_data: 'qs_1_any' },
+          { text: '5-Games Mix', callback_data: 'qs_5_any' }
         ],
         [
           { text: 'Back to Menu', callback_data: 'menu' }
@@ -279,10 +279,10 @@ async function launchQuestSpecialSession(chat, options = { mode: 'mix', legs: 1 
 
   const mode = (typeof options === 'string' ? options : options.mode || 'mix').toLowerCase().trim();
   const legs = (typeof options === 'object' && options.legs) ? Number(options.legs) : 1;
-  const formatLabel = legs > 1 ? `${legs}-Leg Mix` : '1-Leg Mix';
+  const formatLabel = legs > 1 ? `${legs}-Game Mix` : '1-Game Mix';
   const quotaDisplay = isUnlimited ? 'Unlimited (Admin)' : `${dailyUsed + 1}/${QUEST_SPECIAL_MAX_DAILY}`;
 
-  await send(chat, `<b>Quest Special (${formatLabel}) Activated</b>\nScanning live matches (Handicap with O/U fallback)…\n<i>Quota: ${quotaDisplay}</i>`, {
+  await send(chat, `<b>Quest Special (${formatLabel}) Activated</b>\nScanning live games…\n<i>Quota: ${quotaDisplay}</i>`, {
     reply_markup: {
       inline_keyboard: [
         [{ text: 'Cancel Scan', callback_data: 'stop_quest_special' }],
@@ -306,7 +306,7 @@ async function launchQuestSpecialSession(chat, options = { mode: 'mix', legs: 1 
 
     if (result) {
       if (result.isMultiLeg && Array.isArray(result.legs)) {
-        let text = `<b>Quest Special (${result.legsCount}-Leg Mix)</b>\n\n`
+        let text = `<b>Quest Special (${result.legsCount}-Game Mix)</b>\n\n`
           + `<b>Total Odds:</b> @${result.totalOdds}\n\n`;
 
         result.legs.forEach((l, idx) => {
@@ -339,7 +339,7 @@ async function launchQuestSpecialSession(chat, options = { mode: 'mix', legs: 1 
       }
 
       // Single-leg sniper signal
-      let text = `<b>Quest Special (1-Leg Mix)</b>\n\n`
+      let text = `<b>Quest Special (1-Game Mix)</b>\n\n`
         + `<b>Match:</b> ${result.home} vs ${result.away} (${result.minute}′)\n`
         + `<b>Score:</b> ${result.homeScore} - ${result.awayScore}\n`
         + `<b>Pick:</b> <b>${result.analysis.description}</b>\n`

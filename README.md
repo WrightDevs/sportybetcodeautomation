@@ -209,6 +209,29 @@ A scheduled workflow is provided at [`.github/workflows/daily.yml`](.github/work
 
 ---
 
+## Quest Special safe selector
+
+Quest Special is a **live vFootball sniper**. Selection is deterministic code (`src/selection/`); the LLM can only veto.
+
+**Pipeline**
+1. *Pool* - live events inside the firing window (HT: 40-43', FT: 80-86'), clock and score known, one leg per match, only `status 0` markets.
+2. *Probability* - the remaining-goal rate is fitted from the match's own live Over/Under ladder (markets 18/68; team split from 19/20), then each leg is priced with a Poisson model of the remaining goals given the current score. The leg's own de-vigged market price is the cross-check; the leg probability is the **lower** of the two. Nothing is hard-coded or invented; if the ladder is missing the match is skipped.
+3. *Hard filters* - `MIN_LEG_PROB`, odds band, coherence (|model - market| <= tol), straight wins only when no Double Chance survives and prob >= `MIN_WIN_PROB`.
+4. *Score 0-100* - probability (70%), coherence (15%), market-type safety (10%), league (5%).
+5. *Slip* - top `legs` legs, no shared teams, joint probability (product) must be >= `MIN_SLIP_PROB`, else **"no safe slip"** and the scan keeps going. Reserves are kept for replacement.
+6. *Veto* - multi-leg only, 2s, fail-open, may only drop a leg; a dropped leg is replaced from reserves and the bar re-checked.
+7. *Booking* - `POST /orders/share` only. No staking code path exists.
+
+**Time window.** `MARKET_WINDOW = { HT: 40, FT: 80 }` (`src/selection/config.js`) is the *effective playing time*. The firing window is centred on it, and the scoring exposure of the remaining time is multiplied by END/W (45/40 for HT, 90/80 for FT), so the model deliberately assumes more risk than the raw clock. Set `SEL_TIME_SCALING=off` for the raw clock, or change `SEL_WINDOW_HT/FT`.
+
+**Config** (env, defaults): `SEL_MIN_LEG_PROB` 0.78, `SEL_MIN_LEG_ODDS` 1.10, `SEL_MAX_LEG_ODDS` 1.35, `SEL_MIN_SLIP_PROB` 0.45, `SEL_COHERENCE_TOL` 0.10, `SEL_MIN_WIN_PROB` 0.85, `SEL_WINDOW_HT` 40, `SEL_WINDOW_FT` 80, `SEL_TIME_SCALING` on, `SEL_VETO_TIMEOUT_MS` 2000.
+
+Note: a 5-leg slip needs an average leg probability of about 0.85 to clear `MIN_SLIP_PROB` 0.45 (0.78^5 = 0.29), so 5-leg requests will often return "no safe slip". That is intended.
+
+**Calibration.** Every minted slip logs its legs to `data/selection-log.jsonl`. `npm run settle` settles them from final results and prints hit rate per market type and per 5% probability bucket plus the Brier score (lower is better; always predicting 0.8 and hitting 80% gives 0.16). Calibrated means hit rate ~= predicted in each bucket. If a bucket under-performs, raise `SEL_MIN_LEG_PROB`. `node bin/settle.js --backtest 0.85` replays settled legs under a stricter threshold. Tests: `npm test`.
+
+A slip is "high probability", never guaranteed.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

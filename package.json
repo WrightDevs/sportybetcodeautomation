@@ -20,7 +20,9 @@
     "dry-virtual": "node bin/sb.js --dry --virtual",
     "bot": "node bin/bot.js",
     "test-leg": "node bin/sb.js --test",
-    "ping": "node bin/sb.js --ping"
+    "ping": "node bin/sb.js --ping",
+    "test": "node --test test/selection.test.js",
+    "settle": "node bin/settle.js"
   },
   "dependencies": {
     "mongodb": "^7.8.0",
