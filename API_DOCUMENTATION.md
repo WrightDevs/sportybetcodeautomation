@@ -329,8 +329,8 @@ into half-time break.  favourite lock.                     into full time.      
 ---
 
 ### Operational Constraints & Lifecycle
-- **Scan Interval:** Polls SportyBet factsCenter every **4 seconds**.
-- **Execution Lifespan:** Runs for **one match round** (~3.5 minutes). If no match qualifies within this window, the session concludes automatically.
+- **Scan Interval:** Polls SportyBet factsCenter every **3 seconds**.
+- **Execution Lifespan:** Runs for up to **10 minutes** across multiple active and incoming virtual rounds until a qualifying match hits.
 - **Daily Quota:** Limited to **20 activations per user per calendar day** (resets at 00:00 UTC).
 - **VIP Protection:** Only available to users with active VIP subscriptions. Free/expired users receive `403 Forbidden`.
 - **Boom Tracking:** Every generated slip is recorded in MongoDB with `isQuestSpecial: true` and automatically tracked for personal and global win rate analytics.

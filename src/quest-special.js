@@ -40,6 +40,13 @@ function clockOf(ev) {
     const v = ev[k];
     if (v != null && !isNaN(Number(v))) return Number(v);
   }
+  if (typeof ev.playedSeconds === 'string' && ev.playedSeconds.includes(':')) {
+    const [pMin, pSec] = ev.playedSeconds.split(':').map(Number);
+    if (!isNaN(pMin) && !isNaN(pSec)) {
+      const totalSec = pMin * 60 + pSec;
+      return (totalSec / 180) * 90;
+    }
+  }
   const m = /(\d{1,3})/.exec(String(ev.matchStatus || ''));
   if (m) return Number(m[1]);
 
@@ -47,7 +54,7 @@ function clockOf(ev) {
   if (ev.estimateStartTime) {
     const elapsedSec = (Date.now() - Number(ev.estimateStartTime)) / 1000;
     // 180 seconds real time = 90 virtual minutes (1 virtual minute = 2 real seconds)
-    if (elapsedSec >= 0 && elapsedSec <= 180) {
+    if (elapsedSec >= 0 && elapsedSec <= 185) {
       return (elapsedSec / 180) * 90;
     }
   }
@@ -118,11 +125,11 @@ function findOutcome(ev, marketId, pred) {
 
 /**
  * Rule 1: 41-minute window to Half Time → Under 0.5 HT
- * Trigger: ~41' (Window: 39.5' – 42.5', ~79s - 85s into 3-min round)
+ * Trigger: ~41' (Window: 38.0' – 42.5', ~76s - 85s into 3-min round)
  * Imminent half-time whistle with 0 first-half goals.
  */
 function analyze41_HTUnder(ev, minute, h, a) {
-  if (minute < 39.5 || minute > 42.5) return null;
+  if (minute < 38.0 || minute > 42.5) return null;
 
   // Market 68: 1st Half - Over/Under with total=0.5, Outcome Under
   const pick = findOutcome(ev, '68', (o, m) => {
@@ -148,11 +155,11 @@ function analyze41_HTUnder(ev, minute, h, a) {
 
 /**
  * Rule 2: 43-minute window → Winner of H1 (1st Half 1X2)
- * Trigger: ~43' (Window: 42.5' – 45.0', ~85s - 90s into 3-min round)
+ * Trigger: ~43' (Window: 42.0' – 45.5', ~84s - 91s into 3-min round)
  * Lock in the 1st Half winner right before the break.
  */
 function analyze43_H1Winner(ev, minute, h, a) {
-  if (minute < 42.5 || minute > 45.0) return null;
+  if (minute < 42.0 || minute > 45.5) return null;
 
   const margin = h - a;
   const homeLeads = margin > 0;
@@ -185,11 +192,11 @@ function analyze43_H1Winner(ev, minute, h, a) {
 
 /**
  * Rule 3: 85-minute window to Full Time → FT Under 0.5 (or lowest Under line)
- * Trigger: ~85' (Window: 84.0' – 86.8', ~168s - 173s into 3-min round)
+ * Trigger: ~85' (Window: 82.0' – 87.0', ~164s - 174s into 3-min round)
  * Safe Under line into the final whistle.
  */
 function analyze85_FTUnder(ev, minute, h, a) {
-  if (minute < 84.0 || minute > 86.8) return null;
+  if (minute < 82.0 || minute > 87.0) return null;
 
   const totalGoals = (h || 0) + (a || 0);
   const targetLine = totalGoals > 0 ? (totalGoals + 0.5) : 0.5;
@@ -219,13 +226,13 @@ function analyze85_FTUnder(ev, minute, h, a) {
 
 /**
  * Rule 4: 88-minute window to Full Time → Handicap & 1X2 Winner based on 2-goal lead or 1-goal lead
- * Trigger: ~88' (Window: 87.0' – 89.8', ~174s - 179s into 3-min round)
+ * Trigger: ~88' (Window: 86.5' – 90.0', ~173s - 180s into 3-min round)
  * • 2+ goal lead: 1X2 Match Winner on leading team
  * • 1-goal lead: Handicap with +1.5 / +2 cushion or 1X2 Match Winner
  * • Virtual fallback: 1X2 on strong favorite or Handicap 2-goal cushion
  */
 function analyze88_LateLead(ev, minute, h, a) {
-  if (minute < 87.0 || minute > 89.8) return null;
+  if (minute < 86.5 || minute > 90.0) return null;
 
   const margin = Math.abs(h - a);
   const homeLeads = h > a;
@@ -398,12 +405,12 @@ function startSession(chatId, onDone) {
 
   const session = { active: true, startedAt: Date.now(), scans: 0, chatId: id };
 
-  // Poll every 4 seconds (virtual football clock advances ~2 virtual mins every 4s)
+  // Poll every 3 seconds for active virtual matches
   const timer = setInterval(async () => {
     if (!session.active) { clearInterval(timer); activeSessions.delete(id); return; }
 
-    // Auto-timeout after 3.5 minutes (one full 180s cycle + buffer)
-    if (Date.now() - session.startedAt > 210 * 1000) {
+    // Auto-timeout after 10 minutes (allows spanning multiple scheduled virtual rounds)
+    if (Date.now() - session.startedAt > 10 * 60 * 1000) {
       session.active = false;
       clearInterval(timer);
       activeSessions.delete(id);
