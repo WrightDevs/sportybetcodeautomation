@@ -48,18 +48,21 @@ const editMessage = (chat, messageId, text, extra = {}) =>
   call('editMessageText', { chat_id: chat, message_id: messageId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...extra });
 
 const sportsMenu = {
-  inline_keyboard: [[
-    { text: '⚽ Football', callback_data: 'football' },
-    { text: '🕹 eFootball', callback_data: 'efootball' },
-    { text: '⚡ vFootball', callback_data: 'vfootball' }
-  ], [
-    { text: '🎯 Quest Special (Live Signal)', callback_data: 'quest_special' }
-  ], [
-    { text: '📊 My Win Rate', callback_data: 'my_stats' },
-    { text: '🌐 Boom Proof', callback_data: 'global_stats' }
-  ], [
-    { text: 'ℹ️ My VIP Status', callback_data: 'sub_status' }
-  ]]
+  inline_keyboard: [
+    [{ text: '🎯 Quest Special (Live In-Play)', callback_data: 'quest_special' }],
+    [
+      { text: '⚽ Football', callback_data: 'football' },
+      { text: '🕹 eFootball', callback_data: 'efootball' },
+      { text: '⚡ vFootball', callback_data: 'vfootball' }
+    ],
+    [
+      { text: '📊 My Stats & History', callback_data: 'my_stats' },
+      { text: '🌐 Boom Proof', callback_data: 'global_stats' }
+    ],
+    [
+      { text: 'ℹ️ VIP Status', callback_data: 'sub_status' }
+    ]
+  ]
 };
 
 function getPaywallMenu() {
@@ -258,33 +261,23 @@ async function handleQuestSpecial(chat, forcedOptions = null) {
 
   const quotaDisplay = isUnlimited ? 'Unlimited (Admin Access)' : `${dailyUsed}/${QUEST_SPECIAL_MAX_DAILY}`;
 
-  // Interactive format & market selection menu
+  // Interactive format & market selection menu - Clean & Symmetrical
   return send(chat, `🎯 <b>Quest Special — Choose Format & Strategy</b>\n\n`
-    + `Select your ticket format and target market:\n\n`
-    + `🎯 <b>1-LEG SNIPERS (High Precision):</b>\n`
-    + `• 🛡️ <b>Handicap Sniper:</b> Goal cushions (+1, +2, +3 & Double Chance)\n`
-    + `• 📉 <b>Over / Under (O/U):</b> Safe goal-line under locks\n`
-    + `• ⚡ <b>Any Market:</b> Fastest qualifying safe line\n\n`
-    + `🔥 <b>5-LEG ACCUMULATORS (Combo Multiplier):</b>\n`
-    + `• 🛡️ <b>5-Leg Handicap Combo:</b> 5 distinct live match handicaps in 1 code\n`
-    + `• 📉 <b>5-Leg O/U Combo:</b> 5 distinct live match under locks in 1 code\n`
-    + `• ⚡ <b>5-Leg Mixed Combo:</b> Best 5 live qualifying lines in 1 code\n\n`
+    + `Select your slip format and target market below:\n\n`
+    + `• <b>1-Leg Snipers:</b> High-probability single match lock\n`
+    + `• <b>5-Leg Combos:</b> 5-match accumulator multiplier\n\n`
     + `<i>📊 Today's Quota: ${quotaDisplay}</i>`, {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '🛡️ 1-Leg Handicap', callback_data: 'qs_1_handicap' },
-          { text: '📉 1-Leg O/U', callback_data: 'qs_1_ou' }
+          { text: '🛡️ 1-Leg Hcap', callback_data: 'qs_1_handicap' },
+          { text: '📉 1-Leg O/U', callback_data: 'qs_1_ou' },
+          { text: '⚡ 1-Leg Any', callback_data: 'qs_1_any' }
         ],
         [
-          { text: '⚡ 1-Leg Any Market', callback_data: 'qs_1_any' }
-        ],
-        [
-          { text: '🛡️ 5-Leg Handicap Combo', callback_data: 'qs_5_handicap' },
-          { text: '📉 5-Leg O/U Combo', callback_data: 'qs_5_ou' }
-        ],
-        [
-          { text: '🔥 5-Leg Mixed Combo', callback_data: 'qs_5_any' }
+          { text: '🛡️ 5-Leg Hcap', callback_data: 'qs_5_handicap' },
+          { text: '📉 5-Leg O/U', callback_data: 'qs_5_ou' },
+          { text: '🔥 5-Leg Combo', callback_data: 'qs_5_any' }
         ],
         [
           { text: '🔙 Back to Menu', callback_data: 'menu' }
@@ -457,8 +450,15 @@ async function handleUserStats(chat) {
     text += `📋 <b>Recent Slips:</b>\n`;
     for (const s of stats.recentSlips.slice(0, 5)) {
       const badge = s.status === 'boomed' ? '🟢 BOOM' : s.status === 'lost' ? '🔴 LOST' : '⏳ PENDING';
-      text += `• <code>${s.code}</code> @${s.odds} [${badge}]\n`;
+      text += `• <code>${s.code}</code> @${s.odds} [${badge}] (${s.legs || 1} Legs)\n`;
+      if (s.legsDetail && s.legsDetail.length) {
+        for (const leg of s.legsDetail.slice(0, 3)) {
+          const scoreText = leg.score ? ` (Score: ${leg.score})` : '';
+          text += `  └ <i>${leg.match}: ${leg.pick}${scoreText}</i>\n`;
+        }
+      }
     }
+    text += '\n';
   } else {
     text += `<i>Generate codes above to build your win-rate tracking history!</i>`;
   }
@@ -720,7 +720,7 @@ async function poll() {
           else await sendPaywall(chat);
         } else if (cmd === '/status') {
           handleStatus(chat);
-        } else if (cmd === '/stats' || cmd === '/my_stats') {
+        } else if (cmd === '/stats' || cmd === '/my_stats' || cmd === '/history') {
           await handleUserStats(chat);
         } else if (cmd === '/proof' || cmd === '/global_stats' || cmd === '/boom') {
           await handleGlobalStats(chat);

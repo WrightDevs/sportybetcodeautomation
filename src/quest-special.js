@@ -8,7 +8,7 @@ const { isAdmin } = require('./subs');
 // ── Configuration & Headers ────────────────────────────
 const CC = (CFG.REGION || 'gh').toLowerCase();
 const SPORT = 'sr:sport:202120001';
-const MARKETS = '1,10,14,18,60,63,65,68';
+const MARKETS = '1,10,14,18,19,20,29,60,63,65,68';
 
 const MIN_ODDS = Number(process.env.QUEST_MIN_ODDS || 1.05);
 const MAX_ODDS = Number(process.env.QUEST_MAX_ODDS || 1.35);
@@ -107,6 +107,7 @@ async function enrichEventMarkets(ev) {
 }
 
 // ── Handicap Evaluator (Multi-Line + Double Chance +0.5 Fallback) ──────
+// ── Handicap Evaluator (Multi-Line + Double Chance +0.5 Fallback) ──────
 function checkHandicapCandidates(ev, min, sc, isHT) {
   // STRICT SEPARATION:
   // In 1st Half (isHT=true): Market 65 (1st Half - Handicap) & Market 63 (1st Half Double Chance). NEVER Full Time markets!
@@ -115,6 +116,9 @@ function checkHandicapCandidates(ev, min, sc, isHT) {
   const dcMId = isHT ? '63' : '10';
   const stagePrefix = isHT ? '1st Half' : 'Full Time';
   const candidates = [];
+
+  const goalDiff = sc.h - sc.a;
+  const absDiff = Math.abs(goalDiff);
 
   // 1. European Handicap Lines (Outcome 1711 Home, Outcome 1713 Away)
   const mList = getMarkets(ev, hcapMId);
@@ -130,7 +134,60 @@ function checkHandicapCandidates(ev, min, sc, isHT) {
     const hMargin = hAfter - aAfter;
     const aMargin = aAfter - hAfter;
 
-    // Home Handicap (Left option / Outcome 1711) - qualifies if adjusted Home has >= 1 goal cushion
+    // RULE FOR 3+ GOAL LEAD:
+    // If one team already leads by 3+ goals (e.g. 0-3 or 3-0):
+    // SKIP leading team handicap completely.
+    // Trailing team handicap is ONLY allowed if the line gives a net advantage strictly > margin (e.g. 4:0 when 0-3).
+    // An equal line (e.g. 3:0 when 0-3) results in a DRAW (European handicap loss).
+    if (absDiff >= 3) {
+      if (goalDiff <= -3) {
+        // Away leads by 3+ (e.g. 0-3). Only Home with x >= absDiff + 1 (e.g. 4:0 or higher) is safe!
+        if (x >= absDiff + 1 && hMargin >= 1) {
+          const match = getOutcome(m, '1711');
+          if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+            candidates.push({
+              category: 'handicap',
+              window: isHT ? 'ht_handicap' : 'ft_handicap',
+              type: isHT ? 'ht_handicap' : 'ft_handicap',
+              marketId: hcapMId,
+              specifier: m.specifier,
+              outcomeId: '1711',
+              odds: match.odds,
+              cushion: hMargin,
+              description: `${stagePrefix} ${ev.homeTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+              reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} backed by +${x} goals ([${m.specifier}]) maintaining a safe +${hMargin} cushion.`,
+              market: m,
+              outcome: match.outcome
+            });
+          }
+        }
+      } else if (goalDiff >= 3) {
+        // Home leads by 3+ (e.g. 3-0). Only Away with y >= absDiff + 1 (e.g. 0:4 or higher) is safe!
+        if (y >= absDiff + 1 && aMargin >= 1) {
+          const match = getOutcome(m, '1713');
+          if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+            candidates.push({
+              category: 'handicap',
+              window: isHT ? 'ht_handicap' : 'ft_handicap',
+              type: isHT ? 'ht_handicap' : 'ft_handicap',
+              marketId: hcapMId,
+              specifier: m.specifier,
+              outcomeId: '1713',
+              odds: match.odds,
+              cushion: aMargin,
+              description: `${stagePrefix} ${ev.awayTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+              reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} backed by +${y} goals ([${m.specifier}]) maintaining a safe +${aMargin} cushion.`,
+              market: m,
+              outcome: match.outcome
+            });
+          }
+        }
+      }
+      continue; // Skip any other handicap lines when 3+ lead
+    }
+
+    // Standard Cushion Rule (margin < 3):
+    // Home Handicap (Outcome 1711) - must have >= 1 cushion AFTER score
     if (hMargin >= 1) {
       const match = getOutcome(m, '1711');
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
@@ -151,7 +208,7 @@ function checkHandicapCandidates(ev, min, sc, isHT) {
       }
     }
 
-    // Away Handicap (Right option / Outcome 1713) - qualifies if adjusted Away has >= 1 goal cushion
+    // Away Handicap (Outcome 1713) - must have >= 1 cushion AFTER score
     if (aMargin >= 1) {
       const match = getOutcome(m, '1713');
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
@@ -174,76 +231,136 @@ function checkHandicapCandidates(ev, min, sc, isHT) {
   }
 
   // 2. Double Chance (+0.5 Asian Handicap Equivalent - stays open longer when M14 locks)
-  const dcMarkets = getMarkets(ev, dcMId);
-  for (const m of dcMarkets) {
-    // 1X (Home or Draw / Home +0.5 Handicap): Outcome 9
-    if (sc.h >= sc.a) {
-      const match = getOutcome(m, '9');
-      if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
-        const cushion = sc.h > sc.a ? 2 : 1;
-        candidates.push({
-          category: 'handicap',
-          window: isHT ? 'ht_double_chance' : 'ft_double_chance',
-          type: isHT ? 'ht_double_chance' : 'ft_double_chance',
-          marketId: dcMId,
-          specifier: '',
-          outcomeId: '9',
-          odds: match.odds,
-          cushion,
-          description: `${stagePrefix} ${ev.homeTeamName} or Draw (1X / +0.5 Hcap) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} secured with 1X (+0.5 handicap cushion).`,
-          market: m,
-          outcome: match.outcome
-        });
+  if (absDiff < 3) {
+    const dcMarkets = getMarkets(ev, dcMId);
+    for (const m of dcMarkets) {
+      // 1X (Home or Draw / Home +0.5 Handicap): Outcome 9
+      if (sc.h >= sc.a) {
+        const match = getOutcome(m, '9');
+        if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+          const cushion = sc.h > sc.a ? 2 : 1;
+          candidates.push({
+            category: 'handicap',
+            window: isHT ? 'ht_double_chance' : 'ft_double_chance',
+            type: isHT ? 'ht_double_chance' : 'ft_double_chance',
+            marketId: dcMId,
+            specifier: '',
+            outcomeId: '9',
+            odds: match.odds,
+            cushion,
+            description: `${stagePrefix} ${ev.homeTeamName} or Draw (1X / +0.5 Hcap) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+            reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} secured with 1X (+0.5 handicap cushion).`,
+            market: m,
+            outcome: match.outcome
+          });
+        }
       }
-    }
 
-    // X2 (Draw or Away / Away +0.5 Handicap): Outcome 11
-    if (sc.a >= sc.h) {
-      const match = getOutcome(m, '11');
-      if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
-        const cushion = sc.a > sc.h ? 2 : 1;
-        candidates.push({
-          category: 'handicap',
-          window: isHT ? 'ht_double_chance' : 'ft_double_chance',
-          type: isHT ? 'ht_double_chance' : 'ft_double_chance',
-          marketId: dcMId,
-          specifier: '',
-          outcomeId: '11',
-          odds: match.odds,
-          cushion,
-          description: `${stagePrefix} Draw or ${ev.awayTeamName} (X2 / +0.5 Hcap) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} secured with X2 (+0.5 handicap cushion).`,
-          market: m,
-          outcome: match.outcome
-        });
-      }
-    }
-
-    // 12 (Home or Away / Either Team Wins): Outcome 10 when 2+ lead
-    if (Math.abs(sc.h - sc.a) >= 2) {
-      const match = getOutcome(m, '10');
-      if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
-        candidates.push({
-          category: 'handicap',
-          window: isHT ? 'ht_double_chance' : 'ft_double_chance',
-          type: isHT ? 'ht_double_chance' : 'ft_double_chance',
-          marketId: dcMId,
-          specifier: '',
-          outcomeId: '10',
-          odds: match.odds,
-          cushion: 2,
-          description: `${stagePrefix} Home or Away (12 Double Chance) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. 2-goal lead provides decisive cushion.`,
-          market: m,
-          outcome: match.outcome
-        });
+      // X2 (Draw or Away / Away +0.5 Handicap): Outcome 11
+      if (sc.a >= sc.h) {
+        const match = getOutcome(m, '11');
+        if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+          const cushion = sc.a > sc.h ? 2 : 1;
+          candidates.push({
+            category: 'handicap',
+            window: isHT ? 'ht_double_chance' : 'ft_double_chance',
+            type: isHT ? 'ht_double_chance' : 'ft_double_chance',
+            marketId: dcMId,
+            specifier: '',
+            outcomeId: '11',
+            odds: match.odds,
+            cushion,
+            description: `${stagePrefix} Draw or ${ev.awayTeamName} (X2 / +0.5 Hcap) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+            reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} secured with X2 (+0.5 handicap cushion).`,
+            market: m,
+            outcome: match.outcome
+          });
+        }
       }
     }
   }
 
   // Sort candidates by cushion descending, then lowest safe odds
   candidates.sort((a, b) => b.cushion - a.cushion || a.odds - b.odds);
+  return candidates;
+}
+
+// ── No GG / Clean Sheet Evaluator (Both Teams to Score - NO) ─────────
+function checkNoGGCandidates(ev, min, sc, isHT) {
+  const candidates = [];
+  const stagePrefix = isHT ? '1st Half' : 'Full Time';
+
+  // Only valid if at least one team currently has 0 goals (clean sheet active)
+  if (sc.h !== 0 && sc.a !== 0) return candidates;
+
+  // Market 29 (GG/NG / Both Teams to Score): Outcome 30 is "No" (NG)
+  const m29 = getMarkets(ev, '29')[0];
+  if (m29) {
+    const match = getOutcome(m29, '30');
+    if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+      const zeroTeam = sc.h === 0 ? ev.homeTeamName : ev.awayTeamName;
+      candidates.push({
+        category: 'nogg',
+        window: isHT ? 'ht_nogg' : 'ft_nogg',
+        type: isHT ? 'ht_nogg' : 'ft_nogg',
+        marketId: '29',
+        specifier: '',
+        outcomeId: '30',
+        odds: match.odds,
+        description: `${stagePrefix} Both Teams To Score - NO (No GG) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${zeroTeam} has not scored — No GG backed by remaining time buffer.`,
+        market: m29,
+        outcome: match.outcome
+      });
+    }
+  }
+
+  // Market 19 (Home Team O/U) when Home has 0: Home Under 0.5
+  if (sc.h === 0) {
+    const m19 = (ev.markets || []).find(m => m.id === '19' && m.specifier === 'total=0.5');
+    if (m19) {
+      const match = getOutcome(m19, '13'); // Outcome 13 = Under
+      if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+        candidates.push({
+          category: 'nogg',
+          window: isHT ? 'ht_nogg' : 'ft_nogg',
+          type: isHT ? 'ht_nogg' : 'ft_nogg',
+          marketId: '19',
+          specifier: 'total=0.5',
+          outcomeId: '13',
+          odds: match.odds,
+          description: `${stagePrefix} ${ev.homeTeamName} Under 0.5 Goals (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} scoreless — Under 0.5 goals.`,
+          market: m19,
+          outcome: match.outcome
+        });
+      }
+    }
+  }
+
+  // Market 20 (Away Team O/U) when Away has 0: Away Under 0.5
+  if (sc.a === 0) {
+    const m20 = (ev.markets || []).find(m => m.id === '20' && m.specifier === 'total=0.5');
+    if (m20) {
+      const match = getOutcome(m20, '13'); // Outcome 13 = Under
+      if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+        candidates.push({
+          category: 'nogg',
+          window: isHT ? 'ht_nogg' : 'ft_nogg',
+          type: isHT ? 'ht_nogg' : 'ft_nogg',
+          marketId: '20',
+          specifier: 'total=0.5',
+          outcomeId: '13',
+          odds: match.odds,
+          description: `${stagePrefix} ${ev.awayTeamName} Under 0.5 Goals (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} scoreless — Under 0.5 goals.`,
+          market: m20,
+          outcome: match.outcome
+        });
+      }
+    }
+  }
+
   return candidates;
 }
 
@@ -419,11 +536,18 @@ async function fetchLiveVFootball(tries = 3) {
 // ── Event Candidate Selector ───────────────────────────────
 function getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode) {
   let candidates = [];
+  const absDiff = Math.abs(sc.h - sc.a);
+
   if (normalizedMode === 'handicap' || normalizedMode === 'hcap') {
     if (inH1) {
       candidates = checkHandicapCandidates(ev, min, sc, true);
     } else if (inH2 && min >= 75.0 && min <= 84.0) {
       candidates = checkHandicapCandidates(ev, min, sc, false);
+      // User Decision Rule: When a team leads by 3+ goals and safe 4:0+ handicap is unavailable,
+      // fallback to the safest market: No GG (Both Teams to Score - NO)
+      if (candidates.length === 0 && absDiff >= 3) {
+        candidates = checkNoGGCandidates(ev, min, sc, false);
+      }
     }
   } else if (normalizedMode === 'ou' || normalizedMode === 'over_under' || normalizedMode === 'under') {
     if (inH1) {
@@ -432,22 +556,33 @@ function getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode) {
       candidates = checkUnderCandidates(ev, min, sc, false);
     }
   } else {
-    // Mode === 'any' (Best available qualifying market)
+    // Mode === 'any' (Safest available qualifying market)
     if (inH1) {
       candidates = [
         ...checkHandicapCandidates(ev, min, sc, true),
         ...checkUnderCandidates(ev, min, sc, true),
+        ...checkNoGGCandidates(ev, min, sc, true),
         ...checkResultCandidates(ev, min, sc, true)
       ];
     } else if (inH2 && min >= 75.0) {
-      if (min <= 82.0) {
+      if (absDiff >= 3) {
+        // When a team leads by 3+ goals (e.g. 0-3 or 3-0):
+        // Safest order: 1) No GG, 2) Safe 4:0+ handicap, 3) Safe Under
         candidates = [
+          ...checkNoGGCandidates(ev, min, sc, false),
           ...checkHandicapCandidates(ev, min, sc, false),
           ...checkUnderCandidates(ev, min, sc, false)
+        ];
+      } else if (min <= 82.0) {
+        candidates = [
+          ...checkHandicapCandidates(ev, min, sc, false),
+          ...checkUnderCandidates(ev, min, sc, false),
+          ...checkNoGGCandidates(ev, min, sc, false)
         ];
       } else {
         candidates = [
           ...checkUnderCandidates(ev, min, sc, false),
+          ...checkNoGGCandidates(ev, min, sc, false),
           ...checkHandicapCandidates(ev, min, sc, false),
           ...checkResultCandidates(ev, min, sc, false)
         ];
@@ -799,6 +934,7 @@ module.exports = {
   fetchLiveVFootball,
   checkHandicapCandidates,
   checkUnderCandidates,
+  checkNoGGCandidates,
   checkResultCandidates,
   checkHT,
   checkFTHandicap,

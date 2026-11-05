@@ -154,12 +154,40 @@ function evaluateLeg(leg, eventData) {
     }
   }
 
+  // 5. GG/NG (Market 29) & Team Under 0.5 (Market 19/20)
+  if (mid === '29' || desc.toLowerCase().includes('both teams') || desc.toLowerCase().includes('gg')) {
+    const outId = String(leg.outcomeId || '');
+    const isNo = outId === '30' || desc.toLowerCase().includes('no');
+    if (isNo) {
+      const won = (homeScore === 0 || awayScore === 0);
+      return { settled: true, won, score: scoreStr };
+    }
+    const won = (homeScore > 0 && awayScore > 0);
+    return { settled: true, won, score: scoreStr };
+  }
+
+  if (mid === '19') {
+    let threshold = 0.5;
+    const m = /total=([0-9.]+)/.exec(spec) || /([0-9.]+)/.exec(desc);
+    if (m) threshold = parseFloat(m[1]);
+    const isUnder = desc.toLowerCase().includes('under') || String(leg.outcomeId) === '13';
+    return { settled: true, won: isUnder ? homeScore < threshold : homeScore > threshold, score: scoreStr };
+  }
+
+  if (mid === '20') {
+    let threshold = 0.5;
+    const m = /total=([0-9.]+)/.exec(spec) || /([0-9.]+)/.exec(desc);
+    if (m) threshold = parseFloat(m[1]);
+    const isUnder = desc.toLowerCase().includes('under') || String(leg.outcomeId) === '13';
+    return { settled: true, won: isUnder ? awayScore < threshold : awayScore > threshold, score: scoreStr };
+  }
+
   // Default fallback if match ended:
   return { settled: true, won: true, score: scoreStr };
 }
 
 /**
- * Check pending slips and settle won/lost tickets using SportyBet's official shareCode verification
+ * Check pending slips and settle won/lost tickets using SportyBet's official factsCenter event verification
  */
 async function settlePendingSlips(onBoom = null) {
   const slips = loadSlips();
@@ -172,55 +200,51 @@ async function settlePendingSlips(onBoom = null) {
 
   for (const slip of pending) {
     try {
-      const url = `${API}/orders/share/${encodeURIComponent(slip.shareCode)}`;
-      const res = await get(url);
-
-      // Handle expired/purged booking codes (e.g. old virtual football slips)
-      if (!res || !res.data) {
-        const msg = String(res?.message || res?.innerMsg || '');
-        const ageMs = Date.now() - new Date(slip.createdAt).getTime();
-
-        // If the code expired on SportyBet (usually 15-20 mins after virtuals finish), mark it settled
-        if (msg.includes('not valid') || msg.includes('invalid') || ageMs > 25 * 60 * 1000) {
-          slip.status = 'lost';
-          slip.settledAt = new Date().toISOString();
-          lostCount++;
-          modified = true;
-        }
-        continue;
-      }
-
-      const outcomes = res.data.outcomes || [];
-      if (!outcomes.length) continue;
+      if (!slip.legs || !slip.legs.length) continue;
 
       let allEnded = true;
       let allWon = true;
       let anyLost = false;
+      let hasData = false;
 
-      for (const ev of outcomes) {
-        const isEnded = ev.matchStatus === 'Ended' || ev.status === 3 || ev.status === 2;
-        if (!isEnded) {
+      for (const leg of slip.legs) {
+        if (!leg.eventId) continue;
+        try {
+          const evUrl = `${API}/factsCenter/event?eventId=${encodeURIComponent(leg.eventId)}`;
+          const evRes = await get(evUrl);
+          const evData = evRes?.data;
+          if (!evData) {
+            allEnded = false;
+            allWon = false;
+            continue;
+          }
+
+          hasData = true;
+          const isEnded = evData.status === 2 || evData.status === 3 || evData.matchStatus === 'End' || evData.matchStatus === 'ended' || evData.matchStatus === 'finished';
+          if (!isEnded) {
+            allEnded = false;
+            allWon = false;
+            continue;
+          }
+
+          const evaluated = evaluateLeg(leg, { ...evData, matchStatus: 'ended' });
+          if (!evaluated.settled) {
+            allEnded = false;
+            allWon = false;
+            continue;
+          }
+
+          leg.score = evaluated.score || evData.setScore || null;
+          if (evaluated.won) {
+            leg.status = 'won';
+          } else {
+            leg.status = 'lost';
+            anyLost = true;
+            allWon = false;
+          }
+        } catch (_) {
           allEnded = false;
           allWon = false;
-          continue;
-        }
-
-        const market = ev.markets?.[0];
-        const outcome = market?.outcomes?.[0];
-        const isWinning = outcome?.isWinning;
-
-        // Find corresponding leg in our stored slip
-        const leg = slip.legs?.find(l => l.eventId === ev.eventId);
-        if (leg) {
-          leg.score = ev.setScore || null;
-        }
-
-        if (isWinning === 1) {
-          if (leg) leg.status = 'won';
-        } else {
-          anyLost = true;
-          allWon = false;
-          if (leg) leg.status = 'lost';
         }
       }
 
@@ -229,7 +253,7 @@ async function settlePendingSlips(onBoom = null) {
         slip.settledAt = new Date().toISOString();
         lostCount++;
         modified = true;
-      } else if (allEnded && allWon && outcomes.length > 0) {
+      } else if (allEnded && allWon && hasData) {
         slip.status = 'boomed';
         slip.settledAt = new Date().toISOString();
         boomedCount++;
@@ -239,12 +263,21 @@ async function settlePendingSlips(onBoom = null) {
         if (typeof onBoom === 'function') {
           try { await onBoom(slip); } catch (_) {}
         }
+      } else {
+        // Fallback for ancient abandoned slips (> 4 hours old with no data)
+        const ageMs = Date.now() - new Date(slip.createdAt).getTime();
+        if (ageMs > 4 * 60 * 60 * 1000 && !hasData) {
+          slip.status = 'lost';
+          slip.settledAt = new Date().toISOString();
+          lostCount++;
+          modified = true;
+        }
       }
     } catch (e) {
       console.error(`Error settling slip ${slip.shareCode}:`, e.message);
     }
 
-    await sleep(200);
+    await sleep(150);
   }
 
   if (modified) {
@@ -262,7 +295,11 @@ async function settlePendingSlips(onBoom = null) {
  * Compute user analytics for their personal dashboard
  */
 function getUserStats(userId) {
-  const slips = loadSlips().filter(s => s.userId === String(userId));
+  const idStr = String(userId || '');
+  const isAdminUser = idStr === String(CFG.ADMIN_ID || '6916043986');
+  const slips = loadSlips().filter(s =>
+    s.userId === idStr || (isAdminUser && (s.userId === 'community' || s.userId === 'test_user'))
+  );
   const total = slips.length;
   const boomed = slips.filter(s => s.status === 'boomed').length;
   const lost = slips.filter(s => s.status === 'lost').length;
@@ -304,7 +341,7 @@ function getUserStats(userId) {
   const bestBoom = boomedSlips.reduce((max, s) => (s.totalOdds > (max?.totalOdds || 0) ? s : max), null);
 
   return {
-    userId: String(userId),
+    userId: idStr,
     totalSlips: total,
     boomed,
     lost,
@@ -326,6 +363,12 @@ function getUserStats(userId) {
       odds: s.totalOdds,
       status: s.status,
       legs: s.legsCount,
+      legsDetail: (s.legs || []).map(l => ({
+        match: `${l.home || ''} vs ${l.away || ''}`,
+        pick: l.outcomeDesc || '',
+        score: l.score || null,
+        status: l.status || 'pending'
+      })),
       createdAt: s.createdAt,
       settledAt: s.settledAt
     }))
