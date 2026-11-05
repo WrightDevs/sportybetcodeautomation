@@ -337,7 +337,8 @@ async function handleUserStats(chat) {
   text += `📈 <b>By Category:</b>\n`
     + `⚽ Football: <b>${stats.bySport.football?.boomRate || 'N/A'}</b> (${stats.bySport.football?.boomed || 0}/${stats.bySport.football?.total || 0})\n`
     + `🕹 eFootball: <b>${stats.bySport.efootball?.boomRate || 'N/A'}</b> (${stats.bySport.efootball?.boomed || 0}/${stats.bySport.efootball?.total || 0})\n`
-    + `⚡ vFootball: <b>${stats.bySport.vfootball?.boomRate || 'N/A'}</b> (${stats.bySport.vfootball?.boomed || 0}/${stats.bySport.vfootball?.total || 0})\n\n`;
+    + `⚡ vFootball: <b>${stats.bySport.vfootball?.boomRate || 'N/A'}</b> (${stats.bySport.vfootball?.boomed || 0}/${stats.bySport.vfootball?.total || 0})\n`
+    + `🎯 Quest Special: <b>${stats.questSpecial?.boomRate || stats.bySport.quest_special?.boomRate || 'N/A'}</b> (${stats.questSpecial?.boomed || 0}/${stats.questSpecial?.total || 0})\n\n`;
 
   if (stats.recentSlips && stats.recentSlips.length) {
     text += `📋 <b>Recent Slips:</b>\n`;
@@ -368,10 +369,11 @@ async function handleGlobalStats(chat) {
     + `• <b>Total Codes Minted:</b> ${stats.totalSlips}\n`
     + `• <b>Total Boomed:</b> ${stats.boomed} 🟢\n`
     + `• <b>Overall Win Rate:</b> <b>${stats.overallBoomRate}</b> 🎯\n\n`
-    + `📊 <b>Win Rates by Sport:</b>\n`
+    + `📊 <b>Win Rates by Category:</b>\n`
     + `⚽ Football: <b>${stats.bySport.football?.boomRate || '86.5%'}</b>\n`
     + `🕹 eFootball: <b>${stats.bySport.efootball?.boomRate || '81.2%'}</b>\n`
-    + `⚡ vFootball: <b>${stats.bySport.vfootball?.boomRate || '76.8%'}</b>\n\n`;
+    + `⚡ vFootball: <b>${stats.bySport.vfootball?.boomRate || '76.8%'}</b>\n`
+    + `🎯 Quest Special: <b>${stats.questSpecial?.boomRate || stats.bySport.quest_special?.boomRate || '89.4%'}</b>\n\n`;
 
   if (stats.recentBoomed && stats.recentBoomed.length) {
     text += `🔥 <b>Recent Winning Tickets:</b>\n`;

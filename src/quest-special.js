@@ -530,7 +530,7 @@ async function mintLiveBooking(leg, tries = 2) {
 }
 
 // ── Single Scan ────────────────────────────────────────
-async function scanQuestSpecial() {
+async function scanQuestSpecial(userId = 'community') {
   pruneFired();
 
   const events = await fetchLiveVFootball();
@@ -572,6 +572,31 @@ async function scanQuestSpecial() {
       };
 
       const booking = await mintLiveBooking(leg);
+
+      // Record to stats tracker if booking code was minted
+      if (booking && booking.code) {
+        try {
+          recordSlip({
+            userId: String(userId || 'community'),
+            code: booking.code,
+            sport: 'quest_special',
+            totalOdds: signal.odds,
+            legs: [{
+              id: ev.eventId,
+              home: ev.homeTeamName,
+              away: ev.awayTeamName,
+              league: ev.league || 'vFootball',
+              marketId: signal.marketId,
+              outcomeDesc: signal.description,
+              outcomeId: signal.outcomeId,
+              specifier: signal.specifier,
+              odds: signal.odds
+            }],
+            url: booking.url,
+            isQuestSpecial: true
+          });
+        } catch (_) {}
+      }
 
       return {
         eventId: ev.eventId,
@@ -622,7 +647,7 @@ function startSession(chatId, onDone) {
 
     session.scans++;
     try {
-      const signal = await scanQuestSpecial();
+      const signal = await scanQuestSpecial(id);
       if (!signal) return; // Keep scanning
 
       session.active = false;
@@ -632,22 +657,24 @@ function startSession(chatId, onDone) {
 
       lastResults.set(id, signal);
 
-      // Record to Boom tracker if booking code exists
+      // Record to Boom tracker if booking code exists (deduplicated by recordSlip)
       if (signal.code) {
         try {
           recordSlip({
             userId: id,
             code: signal.code,
-            sport: 'vfootball',
+            sport: 'quest_special',
             totalOdds: signal.analysis.odds,
             legs: [{
               id: signal.eventId,
-              marketId: signal.analysis.marketId,
-              specifier: signal.analysis.specifier,
-              outcomeId: signal.analysis.outcomeId,
-              odds: signal.analysis.odds,
               home: signal.home,
-              away: signal.away
+              away: signal.away,
+              league: signal.league || 'vFootball',
+              marketId: signal.analysis.marketId,
+              outcomeDesc: signal.analysis.description,
+              outcomeId: signal.analysis.outcomeId,
+              specifier: signal.analysis.specifier,
+              odds: signal.analysis.odds
             }],
             url: signal.url,
             isQuestSpecial: true

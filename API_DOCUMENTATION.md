@@ -774,8 +774,10 @@ Ideal for the **Landing Page**. Displays total slips generated, global boom rate
     "bySport": {
       "football": { "total": 92, "boomed": 80, "lost": 12, "pending": 4, "boomRate": "87.0%" },
       "efootball": { "total": 38, "boomed": 31, "lost": 7, "pending": 2, "boomRate": "81.6%" },
-      "vfootball": { "total": 24, "boomed": 21, "lost": 3, "pending": 2, "boomRate": "87.5%" }
+      "vfootball": { "total": 24, "boomed": 21, "lost": 3, "pending": 2, "boomRate": "87.5%" },
+      "quest_special": { "total": 18, "boomed": 16, "lost": 2, "pending": 1, "boomRate": "88.9%" }
     },
+    "questSpecial": { "total": 18, "boomed": 16, "lost": 2, "pending": 1, "boomRate": "88.9%" },
     "recentBoomed": [
       {
         "code": "BC8491A",
@@ -819,8 +821,10 @@ Ideal for the **Logged-In User Dashboard**. Returns personal stats, win rate, be
     "bySport": {
       "football": { "total": 8, "boomed": 7, "lost": 1, "pending": 0, "boomRate": "87.5%" },
       "efootball": { "total": 4, "boomed": 3, "lost": 1, "pending": 1, "boomRate": "75.0%" },
-      "vfootball": { "total": 0, "boomed": 0, "lost": 0, "pending": 0, "boomRate": "N/A" }
+      "vfootball": { "total": 0, "boomed": 0, "lost": 0, "pending": 0, "boomRate": "N/A" },
+      "quest_special": { "total": 5, "boomed": 4, "lost": 1, "pending": 0, "boomRate": "80.0%" }
     },
+    "questSpecial": { "total": 5, "boomed": 4, "lost": 1, "pending": 0, "boomRate": "80.0%" },
     "recentSlips": [
       {
         "code": "BC1092Z",
@@ -962,6 +966,7 @@ export interface GlobalStatsResponse {
     overallBoomRate: string;
     overallBoomRateNum: number;
     bySport: Record<string, { total: number; boomed: number; lost: number; pending: number; boomRate: string }>;
+    questSpecial: { total: number; boomed: number; lost: number; pending: number; boomRate: string };
     recentBoomed: Array<{ code: string; sport: string; odds: number; legs: number; settledAt: string }>;
   };
 }
@@ -978,6 +983,7 @@ export interface UserStatsResponse {
     boomRateNum: number;
     bestBoom: { code: string; odds: number; sport: string; date: string } | null;
     bySport: Record<string, { total: number; boomed: number; lost: number; pending: number; boomRate: string }>;
+    questSpecial: { total: number; boomed: number; lost: number; pending: number; boomRate: string };
     recentSlips: Array<{
       code: string;
       sport: string;
