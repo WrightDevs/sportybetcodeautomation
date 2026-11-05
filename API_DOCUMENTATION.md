@@ -458,7 +458,7 @@ into half-time break.  favourite lock.                     into full time.      
 ---
 
 ### Start Background Session
-Starts background scanning for the user. When a game qualifies, the single-leg code is minted automatically.
+Starts background scanning for the user. When a game qualifies, the single-leg code is minted automatically. Users can pick their preferred market strategy (`handicap`, `ou`, or `any`).
 
 - **Endpoint:** `/api/quest-special/start`
 - **Method:** `POST`
@@ -467,16 +467,22 @@ Starts background scanning for the user. When a game qualifies, the single-leg c
 #### Request Body
 ```json
 {
-  "userId": "6916043986"
+  "userId": "6916043986",
+  "mode": "handicap"
 }
 ```
+*`mode` options:*
+- `"handicap"`: Strictly targets goal cushions (European Handicap +1/+2/+3 cushions & Double Chance +0.5).
+- `"ou"`: Strictly targets goal-line Under markets (HT Under & FT Under).
+- `"any"`: (Default) Evaluates both Handicap and O/U, securing whichever qualifies first.
 
 #### Success Response (`200 OK`)
 ```json
 {
   "success": true,
   "userId": "6916043986",
-  "message": "🔍 Quest Special activated! Scanning vFootball live games…",
+  "mode": "handicap",
+  "message": "🔍 Quest Special (HANDICAP) activated! Scanning live vFootball matches…",
   "dailyUsed": 1,
   "maxDaily": 20
 }
@@ -577,7 +583,7 @@ Cancels active scanning if the user navigates away or clicks Cancel:
 ### Instant Live Scan (One-Off)
 Directly probes live in-play vFootball fixtures right now without starting a background poller:
 
-- **Endpoint:** `/api/quest-special/scan`
+- **Endpoint:** `/api/quest-special/scan?mode=handicap` (or `mode=ou` / `mode=any`)
 - **Method:** `GET`
 
 ---
@@ -591,18 +597,19 @@ import { startQuestSpecial, getQuestSpecialStatus, stopQuestSpecial } from '@/li
 
 export function QuestSpecialWidget({ userId }: { userId: string }) {
   const [active, setActive] = useState(false);
+  const [strategy, setStrategy] = useState<'handicap' | 'ou' | 'any'>('handicap');
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState('Idle');
   const [result, setResult] = useState<any>(null);
 
-  const handleStart = async () => {
+  const handleStart = async (chosenMode: 'handicap' | 'ou' | 'any' = strategy) => {
     setLoading(true);
     setResult(null);
-    const res = await startQuestSpecial(userId);
+    const res = await startQuestSpecial(userId, chosenMode);
     setLoading(false);
     if (res.success) {
       setActive(true);
-      setStatusText('Scanning live vFootball round…');
+      setStatusText(`Scanning live vFootball (${chosenMode.toUpperCase()})…`);
     } else {
       alert(res.error || 'Failed to activate Quest Special');
     }
@@ -1145,11 +1152,11 @@ export async function getUserStats(userId: string): Promise<UserStatsResponse> {
 /**
  * Start a Quest Special background scanning session
  */
-export async function startQuestSpecial(userId: string): Promise<{ success: boolean; message?: string; error?: string }> {
+export async function startQuestSpecial(userId: string, mode: 'handicap' | 'ou' | 'any' = 'any'): Promise<{ success: boolean; message?: string; error?: string }> {
   const res = await fetch(`${API_BASE}/api/quest-special/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId })
+    body: JSON.stringify({ userId, mode })
   });
   return res.json();
 }
@@ -1177,8 +1184,8 @@ export async function stopQuestSpecial(userId: string): Promise<{ success: boole
 /**
  * Direct instant probe of live vFootball games (one-off scan)
  */
-export async function scanQuestSpecialLive(): Promise<{ success: boolean; found: boolean; signal?: any; message?: string }> {
-  const res = await fetch(`${API_BASE}/api/quest-special/scan`, { cache: 'no-store' });
+export async function scanQuestSpecialLive(mode: 'handicap' | 'ou' | 'any' = 'any'): Promise<{ success: boolean; found: boolean; signal?: any; message?: string }> {
+  const res = await fetch(`${API_BASE}/api/quest-special/scan?mode=${mode}`, { cache: 'no-store' });
   return res.json();
 }
 ```

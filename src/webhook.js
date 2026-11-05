@@ -434,21 +434,25 @@ function startWebhookServer(onPaymentActivated) {
     }
 
     // Quest Special: Instant Live Scan GET /api/quest-special/scan
-    if (req.method === 'GET' && req.url === '/api/quest-special/scan') {
+    if (req.method === 'GET' && (req.url === '/api/quest-special/scan' || req.url.startsWith('/api/quest-special/scan?'))) {
       (async () => {
         try {
-          const signal = await scanQuestSpecial();
+          const urlObj = new URL(req.url, 'http://localhost');
+          const mode = urlObj.searchParams.get('mode') || urlObj.searchParams.get('strategy') || 'any';
+          const signal = await scanQuestSpecial('community', mode);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           if (!signal) {
             return res.end(JSON.stringify({
               success: true,
               found: false,
-              message: 'No live vFootball game currently meets the 41′ HT Under, 43′ H1 Result, 85′ FT Under, or 88′ Late Lead/Hcap criteria.'
+              mode,
+              message: `No live vFootball game currently meets the ${mode} criteria.`
             }));
           }
           return res.end(JSON.stringify({
             success: true,
             found: true,
+            mode,
             signal
           }));
         } catch (err) {
@@ -470,6 +474,7 @@ function startWebhookServer(onPaymentActivated) {
         let payload = {};
         try { payload = JSON.parse(bodyStr); } catch (_) {}
         const userId = String(payload.userId || payload.chatId || payload.telegramId || '').trim();
+        const mode = String(payload.mode || payload.strategy || payload.marketPreference || 'any').toLowerCase().trim();
 
         if (!userId) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -484,7 +489,7 @@ function startWebhookServer(onPaymentActivated) {
           }));
         }
 
-        const started = startQuestSpecialSession(userId);
+        const started = startQuestSpecialSession(userId, mode);
         if (!started.ok) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ success: false, error: started.error }));
@@ -494,6 +499,7 @@ function startWebhookServer(onPaymentActivated) {
         return res.end(JSON.stringify({
           success: true,
           userId,
+          mode,
           message: started.message,
           dailyUsed: getQuestSpecialDailyCount(userId),
           maxDaily: QUEST_SPECIAL_MAX_DAILY

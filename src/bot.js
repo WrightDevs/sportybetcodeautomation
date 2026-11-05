@@ -215,16 +215,17 @@ async function handleSport(chat, key) {
   }
 }
 
-async function handleQuestSpecial(chat) {
+async function handleQuestSpecial(chat, forcedMode = null) {
   if (!isSubscribed(chat)) {
     return sendPaywall(chat);
   }
 
   if (isQuestSpecialActive(chat)) {
     const status = getQuestSpecialStatus(chat);
+    const modeLabel = status.mode === 'handicap' ? '🛡️ Handicap Only' : status.mode === 'ou' ? '📉 Over / Under' : '⚡ Any Market';
     return send(chat, `⏳ <b>Quest Special is already actively scanning!</b>\n\n`
+      + `• <b>Target Strategy:</b> <b>${modeLabel}</b>\n`
       + `• <b>Current Cycle:</b> Scan #${status.scans} (${status.runningFor}s elapsed)\n`
-      + `• <b>Target:</b> vFootball live matches (40′ HT Handicap/Under | 75′–82′ FT Handicap | 83′ FT Under)\n`
       + `• <b>Today's Quota Used:</b> ${status.dailyUsed}/${status.maxDaily}\n\n`
       + `The bot will message you the second a qualifying match is detected!`, {
       reply_markup: {
@@ -244,28 +245,71 @@ async function handleQuestSpecial(chat) {
     });
   }
 
+  if (forcedMode) {
+    return launchQuestSpecialSession(chat, forcedMode);
+  }
+
+  // Interactive market selection menu
+  return send(chat, `🎯 <b>Quest Special — Choose Market Strategy</b>\n\n`
+    + `Select which market type you want the live sniper to target:\n\n`
+    + `🛡️ <b>Handicap Sniper:</b>\n`
+    + `Targets goal cushions (+1, +2, +3 handicap & +0.5 Double Chance) with verified active liquidity.\n\n`
+    + `📉 <b>Over / Under (O/U):</b>\n`
+    + `Targets safe goal-line under locks (Under 1.5, 2.5, 3.5) with late-game open betting window.\n\n`
+    + `⚡ <b>Any Market (Best Available):</b>\n`
+    + `Evaluates both Handicap & O/U, securing whichever qualifying line is ready first.\n\n`
+    + `<i>📊 Today's Quota: ${dailyUsed}/${QUEST_SPECIAL_MAX_DAILY}</i>`, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🛡️ Handicap Only', callback_data: 'qs_mode_handicap' }],
+        [{ text: '📉 Over / Under (O/U)', callback_data: 'qs_mode_ou' }],
+        [{ text: '⚡ Any Market (Best Available)', callback_data: 'qs_mode_any' }],
+        [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
+      ]
+    }
+  });
+}
+
+async function launchQuestSpecialSession(chat, mode = 'any') {
+  if (!isSubscribed(chat)) return sendPaywall(chat);
+
+  const dailyUsed = getQuestSpecialDailyCount(chat);
+  if (dailyUsed >= QUEST_SPECIAL_MAX_DAILY) {
+    return send(chat, `⚠️ <b>Quest Special Daily Quota Reached (${QUEST_SPECIAL_MAX_DAILY}/${QUEST_SPECIAL_MAX_DAILY})</b>\n\nYour quota resets at midnight!`, { reply_markup: sportsMenu });
+  }
+
+  const modeLabel = mode === 'handicap' ? '🛡️ Handicap Sniper' : mode === 'ou' ? '📉 Over / Under (O/U)' : '⚡ Any Market (Best Available)';
+  const modeDesc = mode === 'handicap'
+    ? 'vFootball Handicap (+1/+2/+3 cushion & Double Chance)'
+    : mode === 'ou'
+    ? 'vFootball Under (HT & FT Under locks)'
+    : 'vFootball live matches (Handicap, O/U & Late Result)';
+
   await send(chat, `🎯 <b>Quest Special Activated!</b>\n\n`
+    + `🎯 <b>Strategy:</b> <b>${modeLabel}</b>\n`
     + `📡 <b>Live Scanner:</b> Running in background\n`
-    + `🎮 <b>Target:</b> vFootball live matches (40′ HT Handicap/Under | 75′–82′ FT Handicap | 83′ FT Under)\n`
+    + `🎮 <b>Target:</b> ${modeDesc}\n`
     + `🎫 <b>Format:</b> Single-leg sniper slip\n`
     + `📊 <b>Today's Quota:</b> ${dailyUsed + 1}/${QUEST_SPECIAL_MAX_DAILY}\n\n`
     + `<i>Stand by… You will receive an instant notification here the moment a qualifying match appears!</i>`, {
     reply_markup: {
       inline_keyboard: [
         [{ text: '🛑 Cancel Scan', callback_data: 'stop_quest_special' }],
+        [{ text: '⚙️ Change Strategy', callback_data: 'quest_special' }],
         [{ text: '🔙 Menu', callback_data: 'menu' }]
       ]
     }
   });
 
-  startQuestSpecial(chat, async (result, timedOut) => {
+  startQuestSpecial(chat, mode, async (result, timedOut) => {
     if (timedOut) {
       return send(chat, `⏳ <b>Quest Special: Cycle Concluded</b>\n\n`
-        + `No live vFootball game reached qualifying criteria (40′ HT Handicap/Under, 75′–82′ FT Handicap, 83′ FT Under) during this scan window.\n\n`
+        + `No live vFootball game reached qualifying criteria for <b>${modeLabel}</b> during this scan window.\n\n`
         + `Tap below to scan the next upcoming round:`, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🎯 Scan Next Round', callback_data: 'quest_special' }],
+            [{ text: `🎯 Scan Next (${modeLabel})`, callback_data: `qs_mode_${mode}` }],
+            [{ text: '⚙️ Change Strategy', callback_data: 'quest_special' }],
             [{ text: '🔙 Main Menu', callback_data: 'menu' }]
           ]
         }
@@ -296,7 +340,8 @@ async function handleQuestSpecial(chat) {
         buttons.push([{ text: `⚡ Open ${result.code || 'Slip'} in SportyBet`, url: result.url }]);
       }
       buttons.push(
-        [{ text: '🎯 Scan Next Match', callback_data: 'quest_special' }],
+        [{ text: `🎯 Scan Next (${modeLabel})`, callback_data: `qs_mode_${mode}` }],
+        [{ text: '⚙️ Change Strategy', callback_data: 'quest_special' }],
         [{ text: '📊 My Win Rate', callback_data: 'my_stats' }],
         [{ text: '🔙 Main Menu', callback_data: 'menu' }]
       );
@@ -519,6 +564,12 @@ async function poll() {
             await handleGlobalStats(chat);
           } else if (data === 'quest_special') {
             await handleQuestSpecial(chat);
+          } else if (data === 'qs_mode_handicap') {
+            await launchQuestSpecialSession(chat, 'handicap');
+          } else if (data === 'qs_mode_ou') {
+            await launchQuestSpecialSession(chat, 'ou');
+          } else if (data === 'qs_mode_any') {
+            await launchQuestSpecialSession(chat, 'any');
           } else if (data === 'stop_quest_special') {
             await handleStopQuestSpecial(chat);
           } else if (['football', 'efootball', 'vfootball'].includes(data)) {
@@ -604,7 +655,16 @@ async function poll() {
         } else if (['/football', '/efootball', '/vfootball'].includes(cmd)) {
           await handleSport(chat, cmd.slice(1));
         } else if (cmd === '/questspecial' || cmd === '/special') {
-          await handleQuestSpecial(chat);
+          const arg = (parts[1] || '').toLowerCase();
+          if (arg === 'handicap' || arg === 'hcap') {
+            await launchQuestSpecialSession(chat, 'handicap');
+          } else if (arg === 'ou' || arg === 'under' || arg === 'o/u') {
+            await launchQuestSpecialSession(chat, 'ou');
+          } else if (arg === 'any' || arg === 'all') {
+            await launchQuestSpecialSession(chat, 'any');
+          } else {
+            await handleQuestSpecial(chat);
+          }
         } else if (cmd === '/stopspecial') {
           await handleStopQuestSpecial(chat);
         }

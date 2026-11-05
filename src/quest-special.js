@@ -6,7 +6,7 @@ const { recordSlip } = require('./tracker');
 // ── Configuration & Headers ────────────────────────────
 const CC = (CFG.REGION || 'gh').toLowerCase();
 const SPORT = 'sr:sport:202120001';
-const MARKETS = '1,14,18,60,65,68';
+const MARKETS = '1,10,14,18,60,63,65,68';
 
 const MIN_ODDS = Number(process.env.QUEST_MIN_ODDS || 1.05);
 const MAX_ODDS = Number(process.env.QUEST_MAX_ODDS || 1.35);
@@ -73,7 +73,11 @@ function scoreOf(ev) {
 
 // ── Market Helpers ─────────────────────────────────────
 function getMarkets(ev, id) {
-  return (ev.markets || []).filter(m => String(m.id) === String(id) && !m.banned);
+  return (ev.markets || []).filter(m =>
+    String(m.id) === String(id) &&
+    !m.banned &&
+    (m.status === 0 || m.status === '0' || m.status === undefined)
+  );
 }
 
 function getOutcome(m, outcomeId) {
@@ -87,7 +91,7 @@ function getOutcome(m, outcomeId) {
 // ── Enrich Event Markets ────────────────────────────────
 // If event only has basic markets from the main list, fetch full details for handicap & OU lines
 async function enrichEventMarkets(ev) {
-  const hasHcap = (ev.markets || []).some(m => m.id === '14' || m.id === '65');
+  const hasHcap = (ev.markets || []).some(m => m.id === '14' || m.id === '65' || m.id === '10');
   if (hasHcap) return ev;
   try {
     const url = `https://www.sportybet.com/api/${CC}/factsCenter/event?eventId=${encodeURIComponent(ev.eventId)}`;
@@ -100,15 +104,18 @@ async function enrichEventMarkets(ev) {
   return ev;
 }
 
-// ── Handicap Evaluator (Top Priority) ───────────────────
-function checkHandicap(ev, min, sc, isHT) {
+// ── Handicap Evaluator (Multi-Line + Double Chance +0.5 Fallback) ──────
+function checkHandicapCandidates(ev, min, sc, isHT) {
   // STRICT SEPARATION:
-  // In 1st Half (isHT=true): ONLY Market 65 (1st Half - Handicap). NEVER Market 14 (Full Time)!
-  // In 2nd Half (isHT=false): ONLY Market 14 (Full Time - Handicap).
-  const mId = isHT ? '65' : '14';
-  const mList = getMarkets(ev, mId);
-  const validPicks = [];
+  // In 1st Half (isHT=true): Market 65 (1st Half - Handicap) & Market 63 (1st Half Double Chance). NEVER Full Time markets!
+  // In 2nd Half (isHT=false): Market 14 (Full Time - Handicap) & Market 10 (Full Time Double Chance).
+  const hcapMId = isHT ? '65' : '14';
+  const dcMId = isHT ? '63' : '10';
+  const stagePrefix = isHT ? '1st Half' : 'Full Time';
+  const candidates = [];
 
+  // 1. European Handicap Lines (Outcome 1711 Home, Outcome 1713 Away)
+  const mList = getMarkets(ev, hcapMId);
   for (const m of mList) {
     const spec = String(m.specifier || '');
     const matchSpec = /^hcp=(\d+):(\d+)$/.exec(spec);
@@ -120,42 +127,43 @@ function checkHandicap(ev, min, sc, isHT) {
     const aAfter = sc.a + y;
     const hMargin = hAfter - aAfter;
     const aMargin = aAfter - hAfter;
-    const stagePrefix = isHT ? '1st Half' : 'Full Time';
 
-    // Home Handicap (Outcome 1711) - qualifies if adjusted Home has >= 1 goal cushion
+    // Home Handicap (Left option / Outcome 1711) - qualifies if adjusted Home has >= 1 goal cushion
     if (hMargin >= 1) {
       const match = getOutcome(m, '1711');
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
-        validPicks.push({
-          window: isHT ? '41min_ht_hcap' : '78min_ft_hcap',
+        candidates.push({
+          category: 'handicap',
+          window: isHT ? 'ht_handicap' : 'ft_handicap',
           type: isHT ? 'ht_handicap' : 'ft_handicap',
-          marketId: mId,
+          marketId: hcapMId,
           specifier: m.specifier,
           outcomeId: '1711',
           odds: match.odds,
           cushion: hMargin,
           description: `${stagePrefix} ${ev.homeTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} holds a +${hMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}] with pre-lock staking buffer.`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} holds a +${hMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}].`,
           market: m,
           outcome: match.outcome
         });
       }
     }
 
-    // Away Handicap (Outcome 1713) - qualifies if adjusted Away has >= 1 goal cushion
+    // Away Handicap (Right option / Outcome 1713) - qualifies if adjusted Away has >= 1 goal cushion
     if (aMargin >= 1) {
       const match = getOutcome(m, '1713');
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
-        validPicks.push({
-          window: isHT ? '41min_ht_hcap' : '78min_ft_hcap',
+        candidates.push({
+          category: 'handicap',
+          window: isHT ? 'ht_handicap' : 'ft_handicap',
           type: isHT ? 'ht_handicap' : 'ft_handicap',
-          marketId: mId,
+          marketId: hcapMId,
           specifier: m.specifier,
           outcomeId: '1713',
           odds: match.odds,
           cushion: aMargin,
           description: `${stagePrefix} ${ev.awayTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} holds a +${aMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}] with pre-lock staking buffer.`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} holds a +${aMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}].`,
           market: m,
           outcome: match.outcome
         });
@@ -163,112 +171,89 @@ function checkHandicap(ev, min, sc, isHT) {
     }
   }
 
-  if (validPicks.length > 0) {
-    // Prioritize greatest cushion (+2/+3 before +1), then lowest safe odds
-    validPicks.sort((a, b) => b.cushion - a.cushion || a.odds - b.odds);
-    return validPicks[0];
-  }
-
-  return null;
-}
-
-// ── Timing Rule 1: 41′ HT (Window: 40.0′ – 42.5′, must be H1) ──
-// Priority 1: Handicap (Market 65 / Market 14)
-// Priority 2: Over/Under Fallback (Market 68 / Market 18)
-function checkHT(ev, min, sc) {
-  // Guard: must be in active first half starting from 40min with safe staking buffer before half-time whistle
-  if (ev.matchStatus !== 'H1' || min < 40.0 || min > 42.5) return null;
-
-  // 1st Priority: Handicap
-  const hcap = checkHandicap(ev, min, sc, true);
-  if (hcap) return hcap;
-
-  // 2nd Priority (Fallback): Over/Under
-  return checkHTUnderFallback(ev, min, sc);
-}
-
-function checkHTUnderFallback(ev, min, sc) {
-  const total = sc.h + sc.a;
-  const targetLine = total + 0.5;
-
-  // 1st priority: Market 68 (1st Half - Over/Under)
-  const m68List = getMarkets(ev, '68');
-  for (const m of m68List) {
-    const v = /^total=([\d.]+)$/.exec(m.specifier || '');
-    if (!v) continue;
-    const line = Number(v[1]);
-    if (line >= targetLine) {
-      const match = getOutcome(m, '13'); // Outcome 13 = Under
+  // 2. Double Chance (+0.5 Asian Handicap Equivalent - stays open longer when M14 locks)
+  const dcMarkets = getMarkets(ev, dcMId);
+  for (const m of dcMarkets) {
+    // 1X (Home or Draw / Home +0.5 Handicap): Outcome 9
+    if (sc.h >= sc.a) {
+      const match = getOutcome(m, '9');
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
-        return {
-          window: '41min_ht_under',
-          type: 'ht_under',
-          marketId: '68',
-          specifier: m.specifier,
-          outcomeId: '13',
+        const cushion = sc.h > sc.a ? 2 : 1;
+        candidates.push({
+          category: 'handicap',
+          window: isHT ? 'ht_double_chance' : 'ft_double_chance',
+          type: isHT ? 'ht_double_chance' : 'ft_double_chance',
+          marketId: dcMId,
+          specifier: '',
+          outcomeId: '9',
           odds: match.odds,
-          description: `1st Half Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Handicap unavailable — 1st Half Under ${line} fallback.`,
+          cushion,
+          description: `${stagePrefix} ${ev.homeTeamName} or Draw (1X / +0.5 Hcap) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} secured with 1X (+0.5 handicap cushion).`,
           market: m,
           outcome: match.outcome
-        };
+        });
+      }
+    }
+
+    // X2 (Draw or Away / Away +0.5 Handicap): Outcome 11
+    if (sc.a >= sc.h) {
+      const match = getOutcome(m, '11');
+      if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+        const cushion = sc.a > sc.h ? 2 : 1;
+        candidates.push({
+          category: 'handicap',
+          window: isHT ? 'ht_double_chance' : 'ft_double_chance',
+          type: isHT ? 'ht_double_chance' : 'ft_double_chance',
+          marketId: dcMId,
+          specifier: '',
+          outcomeId: '11',
+          odds: match.odds,
+          cushion,
+          description: `${stagePrefix} Draw or ${ev.awayTeamName} (X2 / +0.5 Hcap) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} secured with X2 (+0.5 handicap cushion).`,
+          market: m,
+          outcome: match.outcome
+        });
+      }
+    }
+
+    // 12 (Home or Away / Either Team Wins): Outcome 10 when 2+ lead
+    if (Math.abs(sc.h - sc.a) >= 2) {
+      const match = getOutcome(m, '10');
+      if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+        candidates.push({
+          category: 'handicap',
+          window: isHT ? 'ht_double_chance' : 'ft_double_chance',
+          type: isHT ? 'ht_double_chance' : 'ft_double_chance',
+          marketId: dcMId,
+          specifier: '',
+          outcomeId: '10',
+          odds: match.odds,
+          cushion: 2,
+          description: `${stagePrefix} Home or Away (12 Double Chance) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. 2-goal lead provides decisive cushion.`,
+          market: m,
+          outcome: match.outcome
+        });
       }
     }
   }
 
-  return null;
+  // Sort candidates by cushion descending, then lowest safe odds
+  candidates.sort((a, b) => b.cushion - a.cushion || a.odds - b.odds);
+  return candidates;
 }
 
-// ── Timing Rule 2: 41′ H1 Result / Draw (Window: 40.0′ – 43.0′, must be H1) ──
-function checkHTResult(ev, min, sc) {
-  if (ev.matchStatus !== 'H1' || min < 40.0 || min > 43.0) return null;
-
-  const isTied = sc.h === sc.a;
-  const homeLeads = sc.h > sc.a;
-  const wantOutcome = isTied ? '2' : homeLeads ? '1' : '3';
-  const pickLabel = isTied ? '1st Half Draw (X)' : homeLeads ? '1st Half: Home Win' : '1st Half: Away Win';
-
-  // STRICT: Market 60 ONLY (1st Half - 1X2). NEVER fall back to full-time Market 1 in H1!
-  const m60 = getMarkets(ev, '60')[0];
-  if (m60) {
-    const match = getOutcome(m60, wantOutcome);
-    if (match && match.odds <= MAX_RESULT_ODDS) {
-      return {
-        window: '43min_h1_winner',
-        type: isTied ? 'h1_draw' : 'h1_winner',
-        marketId: '60',
-        specifier: '',
-        outcomeId: wantOutcome,
-        odds: match.odds,
-        description: `${pickLabel} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-        reasoning: isTied
-          ? `Match is tied ${sc.h}-${sc.a} at ${Math.round(min)}'. Half-time whistle imminent — Draw (X).`
-          : `${homeLeads ? 'Home' : 'Away'} leads ${sc.h}-${sc.a} at ${Math.round(min)}'. 1st Half leader lock.`,
-        market: m60,
-        outcome: match.outcome
-      };
-    }
-  }
-
-  return null;
-}
-
-// ── Timing Rule 3A: 75′–82′ FT Handicap ONLY (Window: 75.0′ – 82.0′, must be H2) ──
-// Handicap locks around 83′; finding it early at 75′-82′ ensures active markets and staking safety
-function checkFTHandicap(ev, min, sc) {
-  if (ev.matchStatus !== 'H2' || min < 75.0 || min > 82.0) return null;
-  return checkHandicap(ev, min, sc, false);
-}
-
-// ── Timing Rule 3B: 83′–85.5′ FT Over/Under (Window: 83.0′ – 85.5′, must be H2) ──
-// At 83′+, Handicap is locked; Over/Under (Market 18) provides safe late-game staking
-function checkFTUnder(ev, min, sc) {
-  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 85.5) return null;
-
+// ── Over/Under Evaluator (Multi-Line Under Cushion) ─────────────────
+function checkUnderCandidates(ev, min, sc, isHT) {
+  const mId = isHT ? '68' : '18';
+  const stagePrefix = isHT ? '1st Half' : 'Full Time';
   const total = sc.h + sc.a;
   const targetLine = total + 0.5;
+  const candidates = [];
 
-  const m18Lines = getMarkets(ev, '18')
+  const mList = getMarkets(ev, mId)
     .map(m => {
       const v = /^total=([\d.]+)$/.exec(m.specifier || '');
       return v ? { line: Number(v[1]), m } : null;
@@ -276,137 +261,126 @@ function checkFTUnder(ev, min, sc) {
     .filter(x => x && x.line >= targetLine)
     .sort((a, b) => a.line - b.line);
 
-  for (const { line, m } of m18Lines) {
+  for (const { line, m } of mList) {
     const match = getOutcome(m, '13'); // Outcome 13 = Under
     if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
-      return {
-        window: '85min_ft_under',
-        type: 'ft_under',
-        marketId: '18',
+      const buffer = (line - total).toFixed(1);
+      candidates.push({
+        category: 'ou',
+        window: isHT ? 'ht_under' : 'ft_under',
+        type: isHT ? 'ht_under' : 'ft_under',
+        marketId: mId,
         specifier: m.specifier,
         outcomeId: '13',
         odds: match.odds,
-        description: `Full Time Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Late-game Under ${line} locked before final whistle.`,
+        line,
+        buffer,
+        description: `${stagePrefix} Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}' (total ${total} goals). Under ${line} backed by +${buffer} goal breathing room.`,
         market: m,
         outcome: match.outcome
-      };
+      });
     }
   }
 
-  return null;
+  // Sort Under candidates: lowest safe line first (tightest safe odds), then odds
+  candidates.sort((a, b) => a.line - b.line || a.odds - b.odds);
+  return candidates;
 }
 
-// ── Timing Rule 4: 85′ FT Draw / Late Lead / Handicap (Window: 83.0′ – 86.0′, must be H2) ──
-function checkFTResult(ev, min, sc) {
-  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 86.0) return null;
-
-  const margin = Math.abs(sc.h - sc.a);
+// ── 1X2 / Draw / Winner Evaluator ───────────────────────────────────
+function checkResultCandidates(ev, min, sc, isHT) {
+  const mId = isHT ? '60' : '1';
+  const stagePrefix = isHT ? '1st Half' : 'Full Time';
   const isTied = sc.h === sc.a;
   const homeLeads = sc.h > sc.a;
   const awayLeads = sc.a > sc.h;
-  const leaderTag = homeLeads ? 'Home' : 'Away';
-  const wantOutcome = isTied ? '2' : homeLeads ? '1' : '3';
+  const margin = Math.abs(sc.h - sc.a);
+  const candidates = [];
 
-  // Case 1: Tied game at 87'+ → Full Time Draw (X)
+  const m1 = getMarkets(ev, mId)[0];
+  if (!m1) return candidates;
+
+  // Case 1: Draw (X)
   if (isTied) {
-    const m1 = getMarkets(ev, '1')[0];
-    if (m1) {
-      const match = getOutcome(m1, '2');
-      if (match && match.odds <= MAX_RESULT_ODDS) {
-        return {
-          window: '88min_draw',
-          type: 'match_draw',
-          marketId: '1',
-          specifier: '',
-          outcomeId: '2',
-          odds: match.odds,
-          description: `Full Time Draw (X) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Match is tied ${sc.h}-${sc.a} at ${Math.round(min)}'. Final whistle approaching — Draw (X).`,
-          market: m1,
-          outcome: match.outcome
-        };
-      }
+    const match = getOutcome(m1, '2');
+    if (match && match.odds <= MAX_RESULT_ODDS && match.odds >= MIN_ODDS) {
+      candidates.push({
+        category: 'result',
+        window: isHT ? 'h1_draw' : 'ft_draw',
+        type: isHT ? 'h1_draw' : 'match_draw',
+        marketId: mId,
+        specifier: '',
+        outcomeId: '2',
+        odds: match.odds,
+        description: `${stagePrefix} Draw (X) (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+        reasoning: `Match is tied ${sc.h}-${sc.a} at ${Math.round(min)}'. ${stagePrefix} whistle imminent — Draw (X).`,
+        market: m1,
+        outcome: match.outcome
+      });
     }
   }
 
-  // Case 2: 2+ goal lead at 87'+ → 1X2 Match Winner
+  // Case 2: 2+ goal lead
   if (margin >= 2) {
-    const m1 = getMarkets(ev, '1')[0];
-    if (m1) {
-      const match = getOutcome(m1, wantOutcome);
-      if (match && match.odds <= MAX_RESULT_ODDS) {
-        return {
-          window: '88min_lead',
-          type: 'match_winner_2lead',
-          marketId: '1',
-          specifier: '',
-          outcomeId: wantOutcome,
-          odds: match.odds,
-          description: `${leaderTag} to Win (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `${leaderTag} holds a commanding ${sc.h}-${sc.a} lead at ${Math.round(min)}'. Match Winner secured.`,
-          market: m1,
-          outcome: match.outcome
-        };
-      }
+    const wantOutcome = homeLeads ? '1' : '3';
+    const leaderTag = homeLeads ? ev.homeTeamName : ev.awayTeamName;
+    const match = getOutcome(m1, wantOutcome);
+    if (match && match.odds <= MAX_RESULT_ODDS && match.odds >= MIN_ODDS) {
+      candidates.push({
+        category: 'result',
+        window: isHT ? 'h1_leader' : 'ft_leader',
+        type: isHT ? 'h1_winner' : 'match_winner_2lead',
+        marketId: mId,
+        specifier: '',
+        outcomeId: wantOutcome,
+        odds: match.odds,
+        description: `${stagePrefix} ${leaderTag} to Win (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+        reasoning: `${leaderTag} holds a commanding ${sc.h}-${sc.a} lead at ${Math.round(min)}'. Match Winner secured.`,
+        market: m1,
+        outcome: match.outcome
+      });
     }
   }
 
-  // Case 3: 1 goal lead at 87'+ → Handicap cushion or 1X2 Match Winner
-  if (margin === 1) {
-    // Check Market 14 (Handicap) for cushion
-    const m14List = getMarkets(ev, '14');
-    for (const m of m14List) {
-      const spec = String(m.specifier || '');
-      const validCushion = homeLeads
-        ? (spec.includes('hcp=1:0') || spec.includes('hcp=2:0'))
-        : (spec.includes('hcp=0:1') || spec.includes('hcp=0:2'));
+  return candidates;
+}
 
-      if (validCushion) {
-        const wantHcapOutcome = homeLeads ? '1711' : '1713'; // Home / Away Handicap
-        const match = getOutcome(m, wantHcapOutcome) || (m.outcomes || []).find(o => (homeLeads ? o.desc.startsWith('Home') : o.desc.startsWith('Away')) && (o.isActive === 1 || o.isActive === '1'));
-        if (match) {
-          const odds = Number(match.odds || match.outcome?.odds);
-          if (odds <= 1.45) {
-            return {
-              window: '88min_hcap',
-              type: 'handicap_1lead',
-              marketId: '14',
-              specifier: m.specifier,
-              outcomeId: String(match.outcome?.id || match.id || wantHcapOutcome),
-              odds,
-              description: `${leaderTag} Handicap Cushion (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-              reasoning: `${leaderTag} leads ${sc.h}-${sc.a} at ${Math.round(min)}'. Secured with Handicap cushion.`,
-              market: m,
-              outcome: match.outcome || match
-            };
-          }
-        }
-      }
-    }
+// ── Backward-Compatibility Wrappers ─────────────────────────────────
+function checkHandicap(ev, min, sc, isHT) {
+  const cands = checkHandicapCandidates(ev, min, sc, isHT);
+  return cands.length > 0 ? cands[0] : null;
+}
 
-    // Fallback: 1X2 Match Winner on leader
-    const m1 = getMarkets(ev, '1')[0];
-    if (m1) {
-      const match = getOutcome(m1, wantOutcome);
-      if (match && match.odds <= MAX_RESULT_ODDS) {
-        return {
-          window: '88min_1x2',
-          type: 'match_winner_1lead',
-          marketId: '1',
-          specifier: '',
-          outcomeId: wantOutcome,
-          odds: match.odds,
-          description: `${leaderTag} to Win (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `${leaderTag} leads ${sc.h}-${sc.a} at ${Math.round(min)}'. Match Winner.`,
-          market: m1,
-          outcome: match.outcome
-        };
-      }
-    }
-  }
+function checkHT(ev, min, sc) {
+  if (ev.matchStatus !== 'H1' || min < 38.0 || min > 43.0) return null;
+  const hcap = checkHandicap(ev, min, sc, true);
+  if (hcap) return hcap;
+  const under = checkUnderCandidates(ev, min, sc, true);
+  return under.length > 0 ? under[0] : null;
+}
 
-  return null;
+function checkHTResult(ev, min, sc) {
+  if (ev.matchStatus !== 'H1' || min < 38.0 || min > 43.0) return null;
+  const res = checkResultCandidates(ev, min, sc, true);
+  return res.length > 0 ? res[0] : null;
+}
+
+function checkFTHandicap(ev, min, sc) {
+  if (ev.matchStatus !== 'H2' || min < 60.0 || min > 83.0) return null;
+  return checkHandicap(ev, min, sc, false);
+}
+
+function checkFTUnder(ev, min, sc) {
+  if (ev.matchStatus !== 'H2' || min < 68.0 || min > 86.0) return null;
+  const cands = checkUnderCandidates(ev, min, sc, false);
+  return cands.length > 0 ? cands[0] : null;
+}
+
+function checkFTResult(ev, min, sc) {
+  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 86.0) return null;
+  const cands = checkResultCandidates(ev, min, sc, false);
+  return cands.length > 0 ? cands[0] : null;
 }
 
 // ── Fetch Live Matches ─────────────────────────────────
@@ -478,9 +452,10 @@ async function mintLiveBooking(leg, tries = 2) {
   return { err: 'Minting failed' };
 }
 
-// ── Single Scan ────────────────────────────────────────
-async function scanQuestSpecial(userId = 'community') {
+// ── Single Scan with Strategy Mode & Live Mint Verification ──────
+async function scanQuestSpecial(userId = 'community', mode = 'any') {
   pruneFired();
+  const normalizedMode = String(mode || 'any').toLowerCase().trim();
 
   const events = await fetchLiveVFootball();
   if (!events.length) return null;
@@ -490,83 +465,118 @@ async function scanQuestSpecial(userId = 'community') {
     const sc = scoreOf(rawEv);
     if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
 
-    // Check if within any buffered sniper window:
-    // 1. HT Window: 40.0′-43.0′ in H1 (1st Half Handicap & Under)
-    // 2. FT Handicap Window: 75.0′-82.0′ in H2 (Handicap ONLY - pre-lock window)
-    // 3. FT Late Window: 83.0′-86.0′ in H2 (FT Under & Late Result)
-    const inHT = rawEv.matchStatus === 'H1' && min >= 40.0 && min <= 43.0;
-    const inFTHcap = rawEv.matchStatus === 'H2' && min >= 75.0 && min <= 82.0;
-    const inFTLate = rawEv.matchStatus === 'H2' && min >= 83.0 && min <= 86.0;
-    if (!inHT && !inFTHcap && !inFTLate) continue;
+    // Timing Windows:
+    // H1 Window: 38.0′-43.0′ (active 1st half markets)
+    // H2 Window: 60.0′-86.0′ (2nd half markets with early liquidity buffer)
+    const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
+    const inH2 = rawEv.matchStatus === 'H2' && min >= 60.0 && min <= 86.0;
+    if (!inH1 && !inH2) continue;
 
     const ev = await enrichEventMarkets(rawEv);
+    let candidates = [];
 
-    // Check each stage in priority order:
-    // HT (40′-43′): 1. 1st Half Handicap -> 2. 1st Half Under fallback -> 3. H1 winner
-    // FT (75′-82′): FT Handicap ONLY (Market 14 - pre-lock window)
-    // FT (83′-86′): FT Under (Market 18) -> Late 1X2 Winner/Draw (Market 1)
-    const signal = checkHT(ev, min, sc)
-      || checkHTResult(ev, min, sc)
-      || checkFTHandicap(ev, min, sc)
-      || checkFTUnder(ev, min, sc)
-      || checkFTResult(ev, min, sc);
+    if (normalizedMode === 'handicap' || normalizedMode === 'hcap') {
+      // User strictly selected Handicap
+      if (inH1) {
+        candidates = checkHandicapCandidates(ev, min, sc, true);
+      } else if (inH2 && min <= 84.0) {
+        candidates = checkHandicapCandidates(ev, min, sc, false);
+      }
+    } else if (normalizedMode === 'ou' || normalizedMode === 'over_under' || normalizedMode === 'under') {
+      // User strictly selected Over/Under
+      if (inH1) {
+        candidates = checkUnderCandidates(ev, min, sc, true);
+      } else if (inH2 && min >= 65.0) {
+        candidates = checkUnderCandidates(ev, min, sc, false);
+      }
+    } else {
+      // Mode === 'any' (Best available qualifying market)
+      if (inH1) {
+        candidates = [
+          ...checkHandicapCandidates(ev, min, sc, true),
+          ...checkUnderCandidates(ev, min, sc, true),
+          ...checkResultCandidates(ev, min, sc, true)
+        ];
+      } else if (inH2) {
+        if (min <= 78.0) {
+          // Pre-lock: Handicap first, then Under
+          candidates = [
+            ...checkHandicapCandidates(ev, min, sc, false),
+            ...checkUnderCandidates(ev, min, sc, false)
+          ];
+        } else {
+          // Late window: Under first (highest liquidity), then Handicap, then 1X2 late result
+          candidates = [
+            ...checkUnderCandidates(ev, min, sc, false),
+            ...checkHandicapCandidates(ev, min, sc, false),
+            ...checkResultCandidates(ev, min, sc, false)
+          ];
+        }
+      }
+    }
 
-    if (signal) {
-      const fk = `${ev.eventId}:${signal.type}`;
+    if (!candidates || !candidates.length) continue;
+
+    // Verify candidates by live minting before locking in!
+    // If a candidate line is locked on SportyBet, loop immediately tries next candidate!
+    for (const cand of candidates) {
+      const fk = `${ev.eventId}:${cand.marketId}:${cand.specifier || 'none'}:${cand.outcomeId}`;
       if (fired.has(fk)) continue;
-      fired.set(fk, Date.now());
 
       const leg = {
         id: ev.eventId,
-        marketId: signal.marketId,
-        specifier: signal.specifier,
-        outcomeId: signal.outcomeId,
-        odds: signal.odds,
+        marketId: cand.marketId,
+        specifier: cand.specifier || '',
+        outcomeId: cand.outcomeId,
+        odds: cand.odds,
         home: ev.homeTeamName,
         away: ev.awayTeamName
       };
 
       const booking = await mintLiveBooking(leg);
-
-      // Record to stats tracker if booking code was minted
       if (booking && booking.code) {
+        fired.set(fk, Date.now());
+
+        // Record to stats tracker with isQuestSpecial: true
         try {
           recordSlip({
             userId: String(userId || 'community'),
             code: booking.code,
             sport: 'quest_special',
-            totalOdds: signal.odds,
+            totalOdds: cand.odds,
             legs: [{
               id: ev.eventId,
               home: ev.homeTeamName,
               away: ev.awayTeamName,
               league: ev.league || 'vFootball',
-              marketId: signal.marketId,
-              outcomeDesc: signal.description,
-              outcomeId: signal.outcomeId,
-              specifier: signal.specifier,
-              odds: signal.odds
+              marketId: cand.marketId,
+              outcomeDesc: cand.description,
+              outcomeId: cand.outcomeId,
+              specifier: cand.specifier || '',
+              odds: cand.odds
             }],
             url: booking.url,
             isQuestSpecial: true
           });
         } catch (_) {}
-      }
 
-      return {
-        eventId: ev.eventId,
-        home: ev.homeTeamName,
-        away: ev.awayTeamName,
-        league: ev.league || 'vFootball',
-        minute: Math.round(min),
-        homeScore: sc.h,
-        awayScore: sc.a,
-        analysis: signal,
-        code: booking.code || null,
-        url: booking.url || null,
-        mintError: booking.err || null,
-        timestamp: Date.now()
-      };
+        return {
+          eventId: ev.eventId,
+          home: ev.homeTeamName,
+          away: ev.awayTeamName,
+          league: ev.league || 'vFootball',
+          minute: Math.round(min),
+          homeScore: sc.h,
+          awayScore: sc.a,
+          mode: normalizedMode,
+          analysis: cand,
+          code: booking.code,
+          url: booking.url,
+          mintError: null,
+          timestamp: Date.now()
+        };
+      }
+      // If minting failed (e.g. market settled/locked on bookmaker server), next candidate is tested
     }
   }
 
@@ -574,8 +584,17 @@ async function scanQuestSpecial(userId = 'community') {
 }
 
 // ── Session Management (Telegram & Web Polling) ────────
-function startSession(chatId, onDone) {
+function startSession(chatId, modeOrOnDone, onDone) {
   const id = String(chatId);
+  let mode = 'any';
+  let callback = onDone;
+
+  if (typeof modeOrOnDone === 'function') {
+    callback = modeOrOnDone;
+    mode = 'any';
+  } else if (typeof modeOrOnDone === 'string') {
+    mode = modeOrOnDone;
+  }
 
   if (activeSessions.has(id)) {
     return { ok: false, error: 'Quest Special is already active. Wait for the current scan to complete.' };
@@ -584,7 +603,7 @@ function startSession(chatId, onDone) {
     return { ok: false, error: `Daily limit reached (${MAX_DAILY}/${MAX_DAILY}). Try again tomorrow!` };
   }
 
-  const session = { active: true, startedAt: Date.now(), scans: 0, chatId: id };
+  const session = { active: true, startedAt: Date.now(), scans: 0, chatId: id, mode };
 
   // Poll every 3.5 seconds
   const timer = setInterval(async () => {
@@ -595,14 +614,14 @@ function startSession(chatId, onDone) {
       session.active = false;
       clearInterval(timer);
       activeSessions.delete(id);
-      lastResults.set(id, { timedOut: true, timestamp: Date.now() });
-      if (onDone) onDone(null, true);
+      lastResults.set(id, { timedOut: true, timestamp: Date.now(), mode });
+      if (callback) callback(null, true);
       return;
     }
 
     session.scans++;
     try {
-      const signal = await scanQuestSpecial(id);
+      const signal = await scanQuestSpecial(id, session.mode);
       if (!signal) return; // Keep scanning
 
       session.active = false;
@@ -612,32 +631,7 @@ function startSession(chatId, onDone) {
 
       lastResults.set(id, signal);
 
-      // Record to Boom tracker if booking code exists (deduplicated by recordSlip)
-      if (signal.code) {
-        try {
-          recordSlip({
-            userId: id,
-            code: signal.code,
-            sport: 'quest_special',
-            totalOdds: signal.analysis.odds,
-            legs: [{
-              id: signal.eventId,
-              home: signal.home,
-              away: signal.away,
-              league: signal.league || 'vFootball',
-              marketId: signal.analysis.marketId,
-              outcomeDesc: signal.analysis.description,
-              outcomeId: signal.analysis.outcomeId,
-              specifier: signal.analysis.specifier,
-              odds: signal.analysis.odds
-            }],
-            url: signal.url,
-            isQuestSpecial: true
-          });
-        } catch (_) {}
-      }
-
-      if (onDone) onDone(signal, false);
+      if (callback) callback(signal, false);
     } catch (err) {
       console.error('Quest Special loop error:', err.message);
     }
@@ -646,7 +640,7 @@ function startSession(chatId, onDone) {
   session.timer = timer;
   activeSessions.set(id, session);
 
-  return { ok: true, message: '🔍 Quest Special activated! Scanning live vFootball matches…' };
+  return { ok: true, message: `🔍 Quest Special (${mode.toUpperCase()}) activated! Scanning live vFootball matches…`, mode };
 }
 
 function stopSession(chatId) {
@@ -667,6 +661,7 @@ function getStatus(chatId) {
   const lr = lastResults.get(id) || null;
   return {
     active: !!s,
+    mode: s ? s.mode : (lr && lr.mode ? lr.mode : 'any'),
     scans: s ? s.scans : 0,
     runningFor: s ? Math.round((Date.now() - s.startedAt) / 1000) : 0,
     dailyUsed: getDailyCount(id),
@@ -681,6 +676,9 @@ function clearLastResult(chatId) { lastResults.delete(String(chatId)); }
 module.exports = {
   scanQuestSpecial,
   fetchLiveVFootball,
+  checkHandicapCandidates,
+  checkUnderCandidates,
+  checkResultCandidates,
   checkHT,
   checkFTHandicap,
   checkFTUnder,
