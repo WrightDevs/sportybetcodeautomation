@@ -209,6 +209,55 @@ function startWebhookServer(onPaymentActivated) {
       return res.end(JSON.stringify({ status: 'ok', service: 'questpay-webhook-v1', port }));
     }
 
+    // Diagnostic: Discover live inplay endpoint
+    if (req.method === 'GET' && req.url === '/api/debug/find-live') {
+      (async () => {
+        const matches = [];
+        try {
+          const homeRes = await fetch('https://www.sportybet.com/ng/live', { headers: HDR });
+          const html = await homeRes.text();
+          const scriptUrls = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
+
+          for (const sUrl of scriptUrls.slice(0, 8)) {
+            const fullUrl = sUrl.startsWith('http') ? sUrl : `https://www.sportybet.com${sUrl}`;
+            try {
+              const sRes = await fetch(fullUrl, { headers: HDR });
+              const code = await sRes.text();
+              const found = [...code.matchAll(/factsCenter\/[a-zA-Z0-9_]+/g)].map(m => m[0]);
+              matches.push(...found);
+            } catch (_) {}
+          }
+        } catch (e) {
+          matches.push('fetch-error: ' + e.message);
+        }
+
+        const uniqueEndpoints = [...new Set(matches)];
+
+        // Test each discovered factsCenter endpoint
+        const testResults = {};
+        for (const ep of uniqueEndpoints) {
+          try {
+            const tRes = await fetch(`${API}/${ep}?_t=${Date.now()}`, { headers: HDR });
+            const body = await tRes.text();
+            testResults[ep] = {
+              status: tRes.status,
+              preview: body.slice(0, 160)
+            };
+          } catch (err) {
+            testResults[ep] = { err: err.message };
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          uniqueEndpoints,
+          testResults
+        }, null, 2));
+      })();
+      return;
+    }
+
     // Analytics API for Next.js Landing Page: GET /api/analytics/global
     if (req.method === 'GET' && req.url === '/api/analytics/global') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
