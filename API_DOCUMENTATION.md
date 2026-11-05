@@ -418,8 +418,8 @@ into half-time break.  favourite lock.                     into full time.      
 #### Rule 1: Half Time Sniper → Handicap Priority with Dynamic Under Fallback (40.0′ – 42.5′, Active H1)
 - **Clock Window:** 40.0′ – 42.5′ (Must be active `H1`, starting from minute 40 with safe staking buffer before HT whistle).
 - **Target Logic:**
-  - **Priority 1 (Handicap):** Checks Market `65` (1st Half Handicap) or Market `14` (FT Handicap) for active lines providing a $\ge 1$ goal cushion within odds band (`1.01` – `1.35`).
-  - **Priority 2 (O/U Fallback):** If handicap unavailable, falls back to `Under (Current Goals + 0.5)` in Market `68` (`1st Half - Over/Under`).
+  - **Priority 1 (Handicap):** Checks Market `65` (1st Half Handicap) for active lines providing a $\ge 1$ goal cushion within odds band (`1.05` – `1.35`).
+  - **Priority 2 (O/U Fallback):** If handicap unavailable, falls back to `Under (Current Goals + 0.5)` in Market `68` (`1st Half - Over/Under`) with odds $\ge 1.05$.
 - **Reasoning:** In virtual football, closing minutes of the 1st half have virtually no goal conversion. Starting at 40.0′ gives the user the ideal staking window before the halftime whistle.
 
 #### Rule 2: 41 Minutes → 1st Half Winner or 1st Half Draw (40.0′ – 43.0′, Active H1)
@@ -432,12 +432,12 @@ into half-time break.  favourite lock.                     into full time.      
 
 #### Rule 3: Full Time Handicap (75.0′ – 82.0′, Active H2)
 - **Clock Window:** 75.0′ – 82.0′ (Must be active `H2`).
-- **Target Logic:** Market `14` (**Full Time Handicap ONLY** with lines `hcp=1:0`, `hcp=2:0`, `hcp=0:1`, `hcp=0:2`, `hcp=3:0`) providing a $\ge 1$ goal cushion within odds band (`1.01` – `1.35`).
+- **Target Logic:** Market `14` (**Full Time Handicap ONLY** with lines `hcp=1:0`, `hcp=2:0`, `hcp=0:1`, `hcp=0:2`, `hcp=3:0`) providing a $\ge 1$ goal cushion within odds band (`1.05` – `1.35`).
 - **Reasoning:** SportyBet typically locks/suspends Handicap markets around 83′. Sniping Handicap early at 75′–82′ ensures markets are active and gives users ample staking time before any suspension.
 
 #### Rule 4: Late Full Time Over/Under (83.0′ – 85.5′, Active H2)
 - **Clock Window:** 83.0′ – 85.5′ (Must be active `H2`).
-- **Target Logic:** Market `18` (`Full Time Over/Under`) at `Under (Current Goals + 0.5)` with odds in `1.01` – `1.35`.
+- **Target Logic:** Market `18` (`Full Time Over/Under`) at `Under (Current Goals + 0.5)` with odds in `1.05` – `1.35`.
 - **Reasoning:** At 83′+, Handicap is locked, but Over/Under remains open and highly predictable in the closing stretch.
 
 #### Rule 5: Late Full Time Result / Draw (83.0′ – 86.0′, Active H2)

@@ -8,7 +8,7 @@ const CC = (CFG.REGION || 'gh').toLowerCase();
 const SPORT = 'sr:sport:202120001';
 const MARKETS = '1,14,18,60,65,68';
 
-const MIN_ODDS = Number(process.env.QUEST_MIN_ODDS || 1.01);
+const MIN_ODDS = Number(process.env.QUEST_MIN_ODDS || 1.05);
 const MAX_ODDS = Number(process.env.QUEST_MAX_ODDS || 1.35);
 const MAX_RESULT_ODDS = Number(process.env.QUEST_MAX_RESULT_ODDS || 8.0);
 const MAX_DAILY = 20;
@@ -81,7 +81,7 @@ function getOutcome(m, outcomeId) {
   const o = (m.outcomes || []).find(x => String(x.id) === String(outcomeId) && (x.isActive === 1 || x.isActive === '1'));
   if (!o) return null;
   const odds = Number(o.odds);
-  return (!isNaN(odds) && odds >= 1.01) ? { outcome: o, odds } : null;
+  return (!isNaN(odds) && odds >= MIN_ODDS) ? { outcome: o, odds } : null;
 }
 
 // ── Enrich Event Markets ────────────────────────────────
