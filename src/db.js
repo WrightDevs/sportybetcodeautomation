@@ -12,9 +12,14 @@ try {
 const DB_FILE = path.join(ROOT, 'subscribers.json');
 const DATA_DIR = path.join(ROOT, 'data');
 const SLIPS_FILE = path.join(DATA_DIR, 'slips.json');
+const USAGE_FILE = path.join(DATA_DIR, 'quest_usage.json');
 
 // Ensure local directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 // Environment credentials for databases (Always fallback to Atlas Cloud app database)
 const MONGO_FALLBACK = 'mongodb+srv://giftjacksun_db_user:RWSadh1hEdJrJBgX@cluster0.2rcvw7a.mongodb.net/app';
@@ -28,12 +33,14 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_RO
 
 // In-memory cache for sub-millisecond lookups across all aliases
 const subCache = new Map(); // identifier (chatId, email, _id, username) -> { expiresAt, updatedAt, meta }
+const questUsageCache = new Map(); // userId -> { date, count, updatedAt }
 
 let mongoClient = null;
 let mongoDb = null;
 let subscribersCol = null;
 let usersCol = null;
 let slipsCol = null;
+let questUsageCol = null;
 let isMongoReady = false;
 let mongoConnectPromise = null;
 
@@ -64,10 +71,30 @@ function saveLocalSubscribers(db) {
   } catch (_) {}
 }
 
+function loadLocalQuestUsage() {
+  try {
+    if (fs.existsSync(USAGE_FILE)) {
+      return JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8')) || {};
+    }
+  } catch (_) {}
+  return {};
+}
+
+function saveLocalQuestUsage(data) {
+  try {
+    fs.writeFileSync(USAGE_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (_) {}
+}
+
 // Initial warm up from local backup
 const localData = loadLocalSubscribers();
 for (const [id, data] of Object.entries(localData)) {
   subCache.set(String(id), data);
+}
+
+const localUsage = loadLocalQuestUsage();
+for (const [uid, item] of Object.entries(localUsage)) {
+  questUsageCache.set(String(uid), item);
 }
 
 // ----------------------------------------------------
@@ -116,6 +143,7 @@ if (MONGO_URI) {
         subscribersCol = mongoDb.collection('subscribers');
         usersCol = mongoDb.collection('users');
         slipsCol = mongoDb.collection('slips');
+        questUsageCol = mongoDb.collection('quest_usage');
 
         // Ensure indices for performance
         await subscribersCol.createIndex({ chatId: 1 }, { unique: true }).catch(() => {});
@@ -123,9 +151,23 @@ if (MONGO_URI) {
         await slipsCol.createIndex({ userId: 1 }).catch(() => {});
         await usersCol.createIndex({ telegramId: 1 }).catch(() => {});
         await usersCol.createIndex({ email: 1 }).catch(() => {});
+        await questUsageCol.createIndex({ userId: 1, date: 1 }).catch(() => {});
 
         isMongoReady = true;
         console.log(`✅ MongoDB Atlas connected successfully to database: "${dbName}"`);
+
+        // Warm up quest usage directly from MongoDB for today
+        try {
+          const today = todayStr();
+          const todayUsageDocs = await questUsageCol.find({ date: today }).toArray();
+          for (const doc of todayUsageDocs) {
+            questUsageCache.set(String(doc.userId), {
+              date: doc.date,
+              count: Number(doc.count || 0),
+              updatedAt: Number(doc.updatedAt || Date.now())
+            });
+          }
+        } catch (_) {}
 
         // 1. Warm up in-memory cache directly from MongoDB subscribers collection
         const allDocs = await subscribersCol.find({}).toArray();
@@ -439,11 +481,53 @@ async function syncSlipToDb(slip) {
   }
 }
 
+// ----------------------------------------------------
+// 7. Quest Special Daily Usage Persistence
+// ----------------------------------------------------
+function getQuestUsage(userId) {
+  const id = String(userId || '').trim();
+  const today = todayStr();
+  const item = questUsageCache.get(id);
+  return (item && item.date === today) ? item.count : 0;
+}
+
+async function incrementQuestUsage(userId) {
+  const id = String(userId || '').trim();
+  const today = todayStr();
+  const current = getQuestUsage(id);
+  const newCount = current + 1;
+  const entry = { date: today, count: newCount, updatedAt: Date.now() };
+
+  questUsageCache.set(id, entry);
+
+  // 1. Local backup
+  const local = loadLocalQuestUsage();
+  local[id] = entry;
+  saveLocalQuestUsage(local);
+
+  // 2. MongoDB upsert
+  if (isMongoReady && questUsageCol) {
+    try {
+      await questUsageCol.updateOne(
+        { userId: id, date: today },
+        { $set: { userId: id, date: today, count: newCount, updatedAt: entry.updatedAt } },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error('Failed to persist quest_usage to MongoDB:', e.message);
+    }
+  }
+
+  return newCount;
+}
+
 module.exports = {
   getSubscriber,
   saveSubscriber,
   removeSubscriber,
   findUser,
   syncSlipToDb,
-  subCache
+  subCache,
+  getQuestUsage,
+  incrementQuestUsage
 };

@@ -2,6 +2,8 @@
 const { CFG } = require('./config');
 const { sleep } = require('./util');
 const { recordSlip } = require('./tracker');
+const { getQuestUsage, incrementQuestUsage } = require('./db');
+const { isAdmin } = require('./subs');
 
 // ── Configuration & Headers ────────────────────────────
 const CC = (CFG.REGION || 'gh').toLowerCase();
@@ -30,7 +32,6 @@ const BASE_HEADERS = {
 
 // ── In-Memory State ────────────────────────────────────
 const activeSessions = new Map(); // chatId → session
-const dailyUsage     = new Map(); // chatId → { date, count }
 const lastResults    = new Map(); // chatId → signal result (for web polling)
 const fired          = new Map(); // `${eventId}:${stage}` → timestamp
 
@@ -41,19 +42,20 @@ function pruneFired() {
   }
 }
 
-function todayStr() { return new Date().toISOString().slice(0, 10); }
+function isUnlimitedUser(userId) {
+  const id = String(userId || '').trim();
+  if (!id) return false;
+  if (isAdmin && isAdmin(id)) return true;
+  if (id === String(CFG.ADMIN_ID || '6916043986')) return true;
+  return false;
+}
 
 function getDailyCount(chatId) {
-  const u = dailyUsage.get(String(chatId));
-  return (u && u.date === todayStr()) ? u.count : 0;
+  return getQuestUsage(chatId);
 }
 
 function incrementDailyCount(chatId) {
-  const id = String(chatId);
-  const today = todayStr();
-  const u = dailyUsage.get(id);
-  if (!u || u.date !== today) dailyUsage.set(id, { date: today, count: 1 });
-  else u.count++;
+  return incrementQuestUsage(chatId);
 }
 
 // ── Clock & Score Invariants ───────────────────────────
@@ -414,8 +416,59 @@ async function fetchLiveVFootball(tries = 3) {
   return [];
 }
 
-// ── Minting Live Booking Slips ─────────────────────────
-async function mintLiveBooking(leg, tries = 2) {
+// ── Event Candidate Selector ───────────────────────────────
+function getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode) {
+  let candidates = [];
+  if (normalizedMode === 'handicap' || normalizedMode === 'hcap') {
+    if (inH1) {
+      candidates = checkHandicapCandidates(ev, min, sc, true);
+    } else if (inH2 && min <= 84.0) {
+      candidates = checkHandicapCandidates(ev, min, sc, false);
+    }
+  } else if (normalizedMode === 'ou' || normalizedMode === 'over_under' || normalizedMode === 'under') {
+    if (inH1) {
+      candidates = checkUnderCandidates(ev, min, sc, true);
+    } else if (inH2 && min >= 65.0) {
+      candidates = checkUnderCandidates(ev, min, sc, false);
+    }
+  } else {
+    // Mode === 'any' (Best available qualifying market)
+    if (inH1) {
+      candidates = [
+        ...checkHandicapCandidates(ev, min, sc, true),
+        ...checkUnderCandidates(ev, min, sc, true),
+        ...checkResultCandidates(ev, min, sc, true)
+      ];
+    } else if (inH2) {
+      if (min <= 78.0) {
+        candidates = [
+          ...checkHandicapCandidates(ev, min, sc, false),
+          ...checkUnderCandidates(ev, min, sc, false)
+        ];
+      } else {
+        candidates = [
+          ...checkUnderCandidates(ev, min, sc, false),
+          ...checkHandicapCandidates(ev, min, sc, false),
+          ...checkResultCandidates(ev, min, sc, false)
+        ];
+      }
+    }
+  }
+  return candidates;
+}
+
+// ── Minting Live Booking Slips (Single & Multi-Leg) ─────────
+async function mintLiveBooking(legOrLegs, tries = 2) {
+  const legs = Array.isArray(legOrLegs) ? legOrLegs : [legOrLegs];
+  if (!legs.length) return { err: 'No selections provided' };
+
+  const selections = legs.map(l => ({
+    eventId: l.id || l.eventId,
+    marketId: String(l.marketId),
+    specifier: l.specifier || '',
+    outcomeId: String(l.outcomeId)
+  }));
+
   for (let i = 0; i < tries; i++) {
     try {
       const res = await fetch(`https://www.sportybet.com/api/${CC}/orders/share`, {
@@ -424,14 +477,7 @@ async function mintLiveBooking(leg, tries = 2) {
           'Content-Type': 'application/json;charset=UTF-8',
           ...BASE_HEADERS
         },
-        body: JSON.stringify({
-          selections: [{
-            eventId: leg.id,
-            marketId: String(leg.marketId),
-            specifier: leg.specifier || '',
-            outcomeId: String(leg.outcomeId)
-          }]
-        })
+        body: JSON.stringify({ selections })
       });
       const text = await res.text();
       let j;
@@ -452,73 +498,113 @@ async function mintLiveBooking(leg, tries = 2) {
   return { err: 'Minting failed' };
 }
 
-// ── Single Scan with Strategy Mode & Live Mint Verification ──────
-async function scanQuestSpecial(userId = 'community', mode = 'any') {
+// ── Scan with Strategy Mode, Multi-Legs & Live Mint Verification ─
+async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs = 1) {
   pruneFired();
   const normalizedMode = String(mode || 'any').toLowerCase().trim();
+  const legsNeeded = Math.max(1, Math.min(Number(targetLegs) || 1, 10));
 
   const events = await fetchLiveVFootball();
   if (!events.length) return null;
 
+  // Single-Leg Sniper Mode
+  if (legsNeeded === 1) {
+    for (const rawEv of events) {
+      const min = minute(rawEv.playedSeconds);
+      const sc = scoreOf(rawEv);
+      if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
+
+      const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
+      const inH2 = rawEv.matchStatus === 'H2' && min >= 60.0 && min <= 86.0;
+      if (!inH1 && !inH2) continue;
+
+      const ev = await enrichEventMarkets(rawEv);
+      const candidates = getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode);
+      if (!candidates || !candidates.length) continue;
+
+      for (const cand of candidates) {
+        const fk = `${ev.eventId}:${cand.marketId}:${cand.specifier || 'none'}:${cand.outcomeId}`;
+        if (fired.has(fk)) continue;
+
+        const leg = {
+          id: ev.eventId,
+          marketId: cand.marketId,
+          specifier: cand.specifier || '',
+          outcomeId: cand.outcomeId,
+          odds: cand.odds,
+          home: ev.homeTeamName,
+          away: ev.awayTeamName
+        };
+
+        const booking = await mintLiveBooking(leg);
+        if (booking && booking.code) {
+          fired.set(fk, Date.now());
+
+          // Record to stats tracker with isQuestSpecial: true
+          try {
+            recordSlip({
+              userId: String(userId || 'community'),
+              code: booking.code,
+              sport: 'quest_special',
+              totalOdds: cand.odds,
+              legs: [{
+                id: ev.eventId,
+                home: ev.homeTeamName,
+                away: ev.awayTeamName,
+                league: ev.league || 'vFootball',
+                marketId: cand.marketId,
+                outcomeDesc: cand.description,
+                outcomeId: cand.outcomeId,
+                specifier: cand.specifier || '',
+                odds: cand.odds
+              }],
+              url: booking.url,
+              isQuestSpecial: true
+            });
+          } catch (_) {}
+
+          return {
+            isMultiLeg: false,
+            eventId: ev.eventId,
+            home: ev.homeTeamName,
+            away: ev.awayTeamName,
+            league: ev.league || 'vFootball',
+            minute: Math.round(min),
+            homeScore: sc.h,
+            awayScore: sc.a,
+            mode: normalizedMode,
+            analysis: cand,
+            code: booking.code,
+            url: booking.url,
+            mintError: null,
+            timestamp: Date.now()
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  // Multi-Leg Accumulator Mode (targetLegs > 1, e.g. 5 legs)
+  const gathered = [];
+  const seenEventIds = new Set();
+
   for (const rawEv of events) {
+    if (seenEventIds.has(rawEv.eventId)) continue;
+
     const min = minute(rawEv.playedSeconds);
     const sc = scoreOf(rawEv);
-    if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
+    if (min == null || !sc) continue;
 
-    // Timing Windows:
-    // H1 Window: 38.0′-43.0′ (active 1st half markets)
-    // H2 Window: 60.0′-86.0′ (2nd half markets with early liquidity buffer)
     const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
     const inH2 = rawEv.matchStatus === 'H2' && min >= 60.0 && min <= 86.0;
     if (!inH1 && !inH2) continue;
 
     const ev = await enrichEventMarkets(rawEv);
-    let candidates = [];
-
-    if (normalizedMode === 'handicap' || normalizedMode === 'hcap') {
-      // User strictly selected Handicap
-      if (inH1) {
-        candidates = checkHandicapCandidates(ev, min, sc, true);
-      } else if (inH2 && min <= 84.0) {
-        candidates = checkHandicapCandidates(ev, min, sc, false);
-      }
-    } else if (normalizedMode === 'ou' || normalizedMode === 'over_under' || normalizedMode === 'under') {
-      // User strictly selected Over/Under
-      if (inH1) {
-        candidates = checkUnderCandidates(ev, min, sc, true);
-      } else if (inH2 && min >= 65.0) {
-        candidates = checkUnderCandidates(ev, min, sc, false);
-      }
-    } else {
-      // Mode === 'any' (Best available qualifying market)
-      if (inH1) {
-        candidates = [
-          ...checkHandicapCandidates(ev, min, sc, true),
-          ...checkUnderCandidates(ev, min, sc, true),
-          ...checkResultCandidates(ev, min, sc, true)
-        ];
-      } else if (inH2) {
-        if (min <= 78.0) {
-          // Pre-lock: Handicap first, then Under
-          candidates = [
-            ...checkHandicapCandidates(ev, min, sc, false),
-            ...checkUnderCandidates(ev, min, sc, false)
-          ];
-        } else {
-          // Late window: Under first (highest liquidity), then Handicap, then 1X2 late result
-          candidates = [
-            ...checkUnderCandidates(ev, min, sc, false),
-            ...checkHandicapCandidates(ev, min, sc, false),
-            ...checkResultCandidates(ev, min, sc, false)
-          ];
-        }
-      }
-    }
-
+    const candidates = getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode);
     if (!candidates || !candidates.length) continue;
 
-    // Verify candidates by live minting before locking in!
-    // If a candidate line is locked on SportyBet, loop immediately tries next candidate!
+    // Pick best non-fired candidate for this event
     for (const cand of candidates) {
       const fk = `${ev.eventId}:${cand.marketId}:${cand.specifier || 'none'}:${cand.outcomeId}`;
       if (fired.has(fk)) continue;
@@ -533,77 +619,102 @@ async function scanQuestSpecial(userId = 'community', mode = 'any') {
         away: ev.awayTeamName
       };
 
-      const booking = await mintLiveBooking(leg);
-      if (booking && booking.code) {
-        fired.set(fk, Date.now());
-
-        // Record to stats tracker with isQuestSpecial: true
-        try {
-          recordSlip({
-            userId: String(userId || 'community'),
-            code: booking.code,
-            sport: 'quest_special',
-            totalOdds: cand.odds,
-            legs: [{
-              id: ev.eventId,
-              home: ev.homeTeamName,
-              away: ev.awayTeamName,
-              league: ev.league || 'vFootball',
-              marketId: cand.marketId,
-              outcomeDesc: cand.description,
-              outcomeId: cand.outcomeId,
-              specifier: cand.specifier || '',
-              odds: cand.odds
-            }],
-            url: booking.url,
-            isQuestSpecial: true
-          });
-        } catch (_) {}
-
-        return {
-          eventId: ev.eventId,
-          home: ev.homeTeamName,
-          away: ev.awayTeamName,
-          league: ev.league || 'vFootball',
-          minute: Math.round(min),
-          homeScore: sc.h,
-          awayScore: sc.a,
-          mode: normalizedMode,
-          analysis: cand,
-          code: booking.code,
-          url: booking.url,
-          mintError: null,
-          timestamp: Date.now()
-        };
-      }
-      // If minting failed (e.g. market settled/locked on bookmaker server), next candidate is tested
+      gathered.push({ ev, min, sc, cand, fk, leg });
+      seenEventIds.add(ev.eventId);
+      break; // Only 1 leg per match in accumulator
     }
+
+    if (gathered.length >= legsNeeded) break;
+  }
+
+  if (gathered.length < legsNeeded) {
+    return null;
+  }
+
+  const selectedLegs = gathered.slice(0, legsNeeded);
+  const booking = await mintLiveBooking(selectedLegs.map(g => g.leg));
+
+  if (booking && booking.code) {
+    for (const item of selectedLegs) {
+      fired.set(item.fk, Date.now());
+    }
+
+    const totalOdds = Number(selectedLegs.reduce((acc, item) => acc * item.cand.odds, 1).toFixed(2));
+
+    try {
+      recordSlip({
+        userId: String(userId || 'community'),
+        code: booking.code,
+        sport: 'quest_special',
+        totalOdds,
+        legs: selectedLegs.map(item => ({
+          id: item.ev.eventId,
+          home: item.ev.homeTeamName,
+          away: item.ev.awayTeamName,
+          league: item.ev.league || 'vFootball',
+          marketId: item.cand.marketId,
+          outcomeDesc: item.cand.description,
+          outcomeId: item.cand.outcomeId,
+          specifier: item.cand.specifier || '',
+          odds: item.cand.odds
+        })),
+        url: booking.url,
+        isQuestSpecial: true
+      });
+    } catch (_) {}
+
+    return {
+      isMultiLeg: true,
+      legsCount: selectedLegs.length,
+      totalOdds,
+      code: booking.code,
+      url: booking.url,
+      mode: normalizedMode,
+      timestamp: Date.now(),
+      legs: selectedLegs.map(item => ({
+        eventId: item.ev.eventId,
+        home: item.ev.homeTeamName,
+        away: item.ev.awayTeamName,
+        league: item.ev.league || 'vFootball',
+        minute: Math.round(item.min),
+        homeScore: item.sc.h,
+        awayScore: item.sc.a,
+        analysis: item.cand,
+        odds: item.cand.odds,
+        description: item.cand.description,
+        reasoning: item.cand.reasoning
+      }))
+    };
   }
 
   return null;
 }
 
 // ── Session Management (Telegram & Web Polling) ────────
-function startSession(chatId, modeOrOnDone, onDone) {
+function startSession(chatId, optionsOrMode, onDone) {
   const id = String(chatId);
   let mode = 'any';
+  let legs = 1;
   let callback = onDone;
 
-  if (typeof modeOrOnDone === 'function') {
-    callback = modeOrOnDone;
-    mode = 'any';
-  } else if (typeof modeOrOnDone === 'string') {
-    mode = modeOrOnDone;
+  if (typeof optionsOrMode === 'function') {
+    callback = optionsOrMode;
+  } else if (typeof optionsOrMode === 'string') {
+    mode = optionsOrMode;
+  } else if (typeof optionsOrMode === 'object' && optionsOrMode !== null) {
+    if (optionsOrMode.mode) mode = optionsOrMode.mode;
+    if (optionsOrMode.legs) legs = Number(optionsOrMode.legs) || 1;
+    if (optionsOrMode.onDone) callback = optionsOrMode.onDone;
   }
 
   if (activeSessions.has(id)) {
     return { ok: false, error: 'Quest Special is already active. Wait for the current scan to complete.' };
   }
-  if (getDailyCount(id) >= MAX_DAILY) {
+  if (!isUnlimitedUser(id) && getDailyCount(id) >= MAX_DAILY) {
     return { ok: false, error: `Daily limit reached (${MAX_DAILY}/${MAX_DAILY}). Try again tomorrow!` };
   }
 
-  const session = { active: true, startedAt: Date.now(), scans: 0, chatId: id, mode };
+  const session = { active: true, startedAt: Date.now(), scans: 0, chatId: id, mode, legs };
 
   // Poll every 3.5 seconds
   const timer = setInterval(async () => {
@@ -614,14 +725,14 @@ function startSession(chatId, modeOrOnDone, onDone) {
       session.active = false;
       clearInterval(timer);
       activeSessions.delete(id);
-      lastResults.set(id, { timedOut: true, timestamp: Date.now(), mode });
+      lastResults.set(id, { timedOut: true, timestamp: Date.now(), mode, legs });
       if (callback) callback(null, true);
       return;
     }
 
     session.scans++;
     try {
-      const signal = await scanQuestSpecial(id, session.mode);
+      const signal = await scanQuestSpecial(id, session.mode, session.legs);
       if (!signal) return; // Keep scanning
 
       session.active = false;
@@ -640,7 +751,13 @@ function startSession(chatId, modeOrOnDone, onDone) {
   session.timer = timer;
   activeSessions.set(id, session);
 
-  return { ok: true, message: `🔍 Quest Special (${mode.toUpperCase()}) activated! Scanning live vFootball matches…`, mode };
+  const legsLabel = legs > 1 ? `${legs}-Leg ` : '';
+  return {
+    ok: true,
+    message: `🔍 Quest Special (${legsLabel}${mode.toUpperCase()}) activated! Scanning live vFootball matches…`,
+    mode,
+    legs
+  };
 }
 
 function stopSession(chatId) {
@@ -659,13 +776,16 @@ function getStatus(chatId) {
   const id = String(chatId);
   const s  = activeSessions.get(id);
   const lr = lastResults.get(id) || null;
+  const isUnlimited = isUnlimitedUser(id);
   return {
     active: !!s,
     mode: s ? s.mode : (lr && lr.mode ? lr.mode : 'any'),
+    legs: s ? s.legs : (lr && lr.legsCount ? lr.legsCount : 1),
     scans: s ? s.scans : 0,
     runningFor: s ? Math.round((Date.now() - s.startedAt) / 1000) : 0,
     dailyUsed: getDailyCount(id),
-    maxDaily: MAX_DAILY,
+    maxDaily: isUnlimited ? 'Unlimited' : MAX_DAILY,
+    isUnlimited,
     lastResult: lr
   };
 }
@@ -675,6 +795,7 @@ function clearLastResult(chatId) { lastResults.delete(String(chatId)); }
 
 module.exports = {
   scanQuestSpecial,
+  mintLiveBooking,
   fetchLiveVFootball,
   checkHandicapCandidates,
   checkUnderCandidates,
@@ -690,6 +811,8 @@ module.exports = {
   getLastResult,
   clearLastResult,
   getDailyCount,
+  incrementDailyCount,
+  isUnlimitedUser,
   minute,
   scoreOf,
   MAX_DAILY

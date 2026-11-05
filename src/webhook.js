@@ -439,13 +439,15 @@ function startWebhookServer(onPaymentActivated) {
         try {
           const urlObj = new URL(req.url, 'http://localhost');
           const mode = urlObj.searchParams.get('mode') || urlObj.searchParams.get('strategy') || 'any';
-          const signal = await scanQuestSpecial('community', mode);
+          const legs = Number(urlObj.searchParams.get('legs') || 1);
+          const signal = await scanQuestSpecial('community', mode, legs);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           if (!signal) {
             return res.end(JSON.stringify({
               success: true,
               found: false,
               mode,
+              legs,
               message: `No live vFootball game currently meets the ${mode} criteria.`
             }));
           }
@@ -453,6 +455,7 @@ function startWebhookServer(onPaymentActivated) {
             success: true,
             found: true,
             mode,
+            legs,
             signal
           }));
         } catch (err) {
@@ -475,6 +478,7 @@ function startWebhookServer(onPaymentActivated) {
         try { payload = JSON.parse(bodyStr); } catch (_) {}
         const userId = String(payload.userId || payload.chatId || payload.telegramId || '').trim();
         const mode = String(payload.mode || payload.strategy || payload.marketPreference || 'any').toLowerCase().trim();
+        const legs = Number(payload.legs || 1);
 
         if (!userId) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -489,20 +493,23 @@ function startWebhookServer(onPaymentActivated) {
           }));
         }
 
-        const started = startQuestSpecialSession(userId, mode);
+        const started = startQuestSpecialSession(userId, { mode, legs });
         if (!started.ok) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ success: false, error: started.error }));
         }
 
+        const status = getQuestSpecialStatus(userId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
           success: true,
           userId,
           mode,
+          legs: started.legs || legs,
           message: started.message,
-          dailyUsed: getQuestSpecialDailyCount(userId),
-          maxDaily: QUEST_SPECIAL_MAX_DAILY
+          dailyUsed: status.dailyUsed,
+          maxDaily: status.maxDaily,
+          isUnlimited: status.isUnlimited
         }));
       });
       return;

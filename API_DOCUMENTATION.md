@@ -458,7 +458,7 @@ into half-time break.  favourite lock.                     into full time.      
 ---
 
 ### Start Background Session
-Starts background scanning for the user. When a game qualifies, the single-leg code is minted automatically. Users can pick their preferred market strategy (`handicap`, `ou`, or `any`).
+Starts background scanning for the user. When games qualify, the slip (single-leg sniper or 5-leg accumulator) is minted automatically. Users can pick their preferred market strategy (`handicap`, `ou`, or `any`) and ticket format (`legs: 1` or `legs: 5`).
 
 - **Endpoint:** `/api/quest-special/start`
 - **Method:** `POST`
@@ -468,13 +468,18 @@ Starts background scanning for the user. When a game qualifies, the single-leg c
 ```json
 {
   "userId": "6916043986",
-  "mode": "handicap"
+  "mode": "handicap",
+  "legs": 5
 }
 ```
-*`mode` options:*
-- `"handicap"`: Strictly targets goal cushions (European Handicap +1/+2/+3 cushions & Double Chance +0.5).
-- `"ou"`: Strictly targets goal-line Under markets (HT Under & FT Under).
-- `"any"`: (Default) Evaluates both Handicap and O/U, securing whichever qualifies first.
+*Parameters:*
+- `mode`:
+  - `"handicap"`: Strictly targets goal cushions (European Handicap +1/+2/+3 cushions & Double Chance +0.5).
+  - `"ou"`: Strictly targets goal-line Under markets (HT Under & FT Under).
+  - `"any"`: (Default) Evaluates both Handicap and O/U, securing whichever qualifies first.
+- `legs`: (Optional, default `1`)
+  - `1`: Single-leg sniper slip.
+  - `5`: 5-leg live accumulator combo combining 5 distinct live match cushions in 1 SportyBet code.
 
 #### Success Response (`200 OK`)
 ```json
@@ -482,9 +487,11 @@ Starts background scanning for the user. When a game qualifies, the single-leg c
   "success": true,
   "userId": "6916043986",
   "mode": "handicap",
-  "message": "🔍 Quest Special (HANDICAP) activated! Scanning live vFootball matches…",
-  "dailyUsed": 1,
-  "maxDaily": 20
+  "legs": 5,
+  "message": "🔍 Quest Special (5-Leg HANDICAP) activated! Scanning live vFootball matches…",
+  "dailyUsed": 0,
+  "maxDaily": "Unlimited",
+  "isUnlimited": true
 }
 ```
 
@@ -511,23 +518,65 @@ Poll every 3–5 seconds from the web dashboard while Quest Special is active:
   "success": true,
   "userId": "6916043986",
   "active": true,
+  "mode": "any",
+  "legs": 5,
   "scans": 3,
   "runningFor": 24,
-  "dailyUsed": 1,
-  "maxDaily": 20,
+  "dailyUsed": 0,
+  "maxDaily": "Unlimited",
+  "isUnlimited": true,
   "lastResult": null
 }
 ```
 
-#### Response When Game Found (`200 OK`)
+#### Response When Multi-Leg Accumulator Found (`200 OK`)
+```json
+{
+  "success": true,
+  "userId": "6916043986",
+  "active": false,
+  "mode": "any",
+  "legs": 5,
+  "dailyUsed": 1,
+  "maxDaily": "Unlimited",
+  "isUnlimited": true,
+  "lastResult": {
+    "isMultiLeg": true,
+    "legsCount": 5,
+    "totalOdds": 1.62,
+    "code": "ZNM4T0",
+    "url": "https://www.sportybet.com/ng/?shareCode=ZNM4T0",
+    "mode": "any",
+    "timestamp": 1741234567890,
+    "legs": [
+      {
+        "eventId": "sr:match:200026110522226",
+        "home": "ALA",
+        "away": "ELC",
+        "league": "vFootball",
+        "minute": 77,
+        "homeScore": 0,
+        "awayScore": 0,
+        "odds": 1.07,
+        "description": "Full Time ELC Handicap [hcp=0:1] (ALA vs ELC at 77')",
+        "reasoning": "Score is 0-0 at 77'. ELC holds a +1 cushion on full time handicap [hcp=0:1]."
+      }
+    ]
+  }
+}
+```
+
+#### Response When Single-Leg Found (`200 OK`)
 ```json
 {
   "success": true,
   "userId": "6916043986",
   "active": false,
   "dailyUsed": 1,
-  "maxDaily": 20,
+  "maxDaily": "Unlimited",
+  "isUnlimited": true,
   "lastResult": {
+    "isMultiLeg": false,
     "code": "BC9X2A",
     "url": "https://www.sportybet.com/ng/?shareCode=BC9X2A",
     "home": "Manchester City",
@@ -537,9 +586,9 @@ Poll every 3–5 seconds from the web dashboard while Quest Special is active:
     "homeScore": 0,
     "awayScore": 2,
     "analysis": {
-      "window": "80min",
-      "type": "match_winner",
-      "description": "Away to Win (0-2 at 80')",
+      "window": "ft_handicap",
+      "type": "ft_handicap",
+      "description": "Full Time Liverpool Handicap [hcp=0:3]",
       "odds": 1.12,
       "reasoning": "Away leads 0-2 by 2 goals at 80'. Strong Match Winner."
     },
@@ -555,7 +604,8 @@ Poll every 3–5 seconds from the web dashboard while Quest Special is active:
   "userId": "6916043986",
   "active": false,
   "dailyUsed": 0,
-  "maxDaily": 20,
+  "maxDaily": "Unlimited",
+  "isUnlimited": true,
   "lastResult": {
     "timedOut": true,
     "timestamp": 1741234747000
@@ -583,7 +633,7 @@ Cancels active scanning if the user navigates away or clicks Cancel:
 ### Instant Live Scan (One-Off)
 Directly probes live in-play vFootball fixtures right now without starting a background poller:
 
-- **Endpoint:** `/api/quest-special/scan?mode=handicap` (or `mode=ou` / `mode=any`)
+- **Endpoint:** `/api/quest-special/scan?mode=handicap&legs=5` (or `legs=1`)
 - **Method:** `GET`
 
 ---
