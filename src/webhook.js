@@ -212,48 +212,41 @@ function startWebhookServer(onPaymentActivated) {
     // Diagnostic: Discover live inplay endpoint
     if (req.method === 'GET' && req.url === '/api/debug/find-live') {
       (async () => {
-        const matches = [];
-        try {
-          const homeRes = await fetch('https://www.sportybet.com/ng/live', { headers: HDR });
-          const html = await homeRes.text();
-          const scriptUrls = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
+        const query = 'marketId=1,18,14&pageSize=20&pageNum=1&option=1&order=0&_t=' + Date.now();
+        const testEndpoints = [
+          `factsCenter/liveSchedule?sportId=sr:sport:1&${query}`,
+          `factsCenter/liveSchedule?sportId=sr:sport:137&${query}`,
+          `factsCenter/liveSchedule?sportId=sr:sport:202120001&${query}`,
+          `factsCenter/wapLiveSchedule?sportId=sr:sport:1&${query}`,
+          `factsCenter/pcUpcomingEvents?sportId=sr:sport:1&timeline=0&${query}`,
+          `factsCenter/pcUpcomingEvents?sportId=sr:sport:137&timeline=0&${query}`,
+          `factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&timeline=0&${query}`,
+          `factsCenter/eventDetail?eventId=sr:match:200026110521077`,
+          `orders/share/BC9X2A`
+        ];
 
-          for (const sUrl of scriptUrls.slice(0, 8)) {
-            const fullUrl = sUrl.startsWith('http') ? sUrl : `https://www.sportybet.com${sUrl}`;
-            try {
-              const sRes = await fetch(fullUrl, { headers: HDR });
-              const code = await sRes.text();
-              const found = [...code.matchAll(/factsCenter\/[a-zA-Z0-9_]+/g)].map(m => m[0]);
-              matches.push(...found);
-            } catch (_) {}
-          }
-        } catch (e) {
-          matches.push('fetch-error: ' + e.message);
-        }
-
-        const uniqueEndpoints = [...new Set(matches)];
-
-        // Test each discovered factsCenter endpoint
-        const testResults = {};
-        for (const ep of uniqueEndpoints) {
+        const results = {};
+        for (const ep of testEndpoints) {
           try {
-            const tRes = await fetch(`${API}/${ep}?_t=${Date.now()}`, { headers: HDR });
-            const body = await tRes.text();
-            testResults[ep] = {
-              status: tRes.status,
-              preview: body.slice(0, 160)
+            const url = `${API}/${ep}`;
+            const r = await fetch(url, { headers: HDR });
+            const text = await r.text();
+            let j = null;
+            try { j = JSON.parse(text); } catch (_) {}
+            results[ep.split('?')[0]] = {
+              status: r.status,
+              bizCode: j?.bizCode,
+              totalNum: j?.data?.totalNum ?? (Array.isArray(j?.data) ? j.data.length : null),
+              tournaments: (j?.data?.tournaments || []).length,
+              preview: text.slice(0, 150)
             };
-          } catch (err) {
-            testResults[ep] = { err: err.message };
+          } catch (e) {
+            results[ep.split('?')[0]] = { err: e.message };
           }
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({
-          success: true,
-          uniqueEndpoints,
-          testResults
-        }, null, 2));
+        return res.end(JSON.stringify({ success: true, results }, null, 2));
       })();
       return;
     }
