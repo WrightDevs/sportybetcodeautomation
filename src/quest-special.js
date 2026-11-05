@@ -369,12 +369,12 @@ function checkHTResult(ev, min, sc) {
 }
 
 function checkFTHandicap(ev, min, sc) {
-  if (ev.matchStatus !== 'H2' || min < 60.0 || min > 83.0) return null;
+  if (ev.matchStatus !== 'H2' || min < 75.0 || min > 84.0) return null;
   return checkHandicap(ev, min, sc, false);
 }
 
 function checkFTUnder(ev, min, sc) {
-  if (ev.matchStatus !== 'H2' || min < 68.0 || min > 86.0) return null;
+  if (ev.matchStatus !== 'H2' || min < 75.0 || min > 86.0) return null;
   const cands = checkUnderCandidates(ev, min, sc, false);
   return cands.length > 0 ? cands[0] : null;
 }
@@ -422,13 +422,13 @@ function getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode) {
   if (normalizedMode === 'handicap' || normalizedMode === 'hcap') {
     if (inH1) {
       candidates = checkHandicapCandidates(ev, min, sc, true);
-    } else if (inH2 && min <= 84.0) {
+    } else if (inH2 && min >= 75.0 && min <= 84.0) {
       candidates = checkHandicapCandidates(ev, min, sc, false);
     }
   } else if (normalizedMode === 'ou' || normalizedMode === 'over_under' || normalizedMode === 'under') {
     if (inH1) {
       candidates = checkUnderCandidates(ev, min, sc, true);
-    } else if (inH2 && min >= 65.0) {
+    } else if (inH2 && min >= 75.0) {
       candidates = checkUnderCandidates(ev, min, sc, false);
     }
   } else {
@@ -439,8 +439,8 @@ function getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode) {
         ...checkUnderCandidates(ev, min, sc, true),
         ...checkResultCandidates(ev, min, sc, true)
       ];
-    } else if (inH2) {
-      if (min <= 78.0) {
+    } else if (inH2 && min >= 75.0) {
+      if (min <= 82.0) {
         candidates = [
           ...checkHandicapCandidates(ev, min, sc, false),
           ...checkUnderCandidates(ev, min, sc, false)
@@ -515,7 +515,7 @@ async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs =
       if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
 
       const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
-      const inH2 = rawEv.matchStatus === 'H2' && min >= 60.0 && min <= 86.0;
+      const inH2 = rawEv.matchStatus === 'H2' && min >= 75.0 && min <= 86.0;
       if (!inH1 && !inH2) continue;
 
       const ev = await enrichEventMarkets(rawEv);
@@ -596,12 +596,12 @@ async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs =
     const sc = scoreOf(rawEv);
     if (min == null || !sc) continue;
 
-    const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
-    const inH2 = rawEv.matchStatus === 'H2' && min >= 60.0 && min <= 86.0;
-    if (!inH1 && !inH2) continue;
+    // Strictly fetch from 75' onwards (H2 75'-86') - NOT 60' and NOT H1
+    const inH2 = rawEv.matchStatus === 'H2' && min >= 75.0 && min <= 86.0;
+    if (!inH2) continue;
 
     const ev = await enrichEventMarkets(rawEv);
-    const candidates = getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode);
+    const candidates = getCandidatesForEvent(ev, min, sc, false, inH2, normalizedMode);
     if (!candidates || !candidates.length) continue;
 
     // Pick best non-fired candidate for this event
