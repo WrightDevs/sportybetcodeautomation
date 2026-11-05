@@ -9,6 +9,7 @@ Official API documentation for the SportyBet Automation engine, Telegram bot, Qu
 ---
 
 ## Table of Contents
+0. [⚡ Web Developer Quickstart Guide](#-web-developer-quickstart-guide)
 1. [Telegram Login & Account Linking](#1-telegram-login--account-linking)
    - `POST /api/auth/telegram`
    - `GET /api/subscription/:userId`
@@ -32,6 +33,118 @@ Official API documentation for the SportyBet Automation engine, Telegram bot, Qu
    - `POST /webhook/questpay` *(QuestPay IPN)*
    - `GET /ping`
 6. [Next.js / TypeScript Integration Client](#6-nextjs--typescript-integration-client)
+
+---
+
+## ⚡ Web Developer Quickstart Guide
+
+### 1. Essential Overview
+- **Production Base URL:** `https://sportybetcodeautomation.onrender.com`
+- **Database:** MongoDB Atlas Cloud (Database: `app`, Collections: `users`, `subscribers`, `slips`).
+- **VIP Subscription Price:** **₦10 for 7 Days** (updated from ₦1,000). The backend bills exactly ₦10.
+- **CORS:** Enabled globally (`Access-Control-Allow-Origin: *`). You can call endpoints directly from client-side or server-side Next.js / React.
+
+### 2. Multi-Key Identity & 2-Way Synchronization
+The backend unifies the web dashboard and Telegram bot accounts automatically. You can pass **ANY** identifier in your API requests:
+- MongoDB User `_id` (e.g. `"6aeb75c21deed4a3d7e4a8ef"`)
+- User Email (e.g. `"codewithjacksun@gmail.com"`)
+- Username (e.g. `"jacksun"`)
+- Telegram ID (e.g. `"5436260273"`)
+
+The backend automatically searches the `users` collection, detects connected accounts, and syncs VIP status across both platforms:
+- **If user pays on website:** Website unlocks immediately AND their Telegram bot unlocks immediately.
+- **If user pays on Telegram:** Telegram unlocks immediately AND their website dashboard unlocks immediately.
+
+---
+
+### 3. Core 5-Step Web Implementation
+
+#### Step 1: Check User VIP Status
+```ts
+// Call this on page load or user login:
+const res = await fetch(`https://sportybetcodeautomation.onrender.com/api/subscription/${user._id || user.email}`);
+const { subscription } = await res.json();
+
+console.log(subscription.active);   // boolean (true / false)
+console.log(subscription.daysLeft); // integer (e.g. 7)
+console.log(subscription.expDate);  // formatted date string
+```
+
+#### Step 2: Initialize ₦10 VIP Payment
+When the user clicks "Upgrade to VIP" on the website:
+```ts
+const res = await fetch('https://sportybetcodeautomation.onrender.com/api/payment/initialize', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    userId: user._id,           // MongoDB user _id
+    email: user.email,          // User's email
+    telegramId: user.telegramId // Optional: if already known
+  })
+});
+
+const { checkoutUrl, reference, virtualAccount } = await res.json();
+// Redirect user to `checkoutUrl` or display `virtualAccount` bank details for ₦10!
+```
+
+#### Step 3: Verify Payment Status
+When user completes payment or returns from QuestPay checkout:
+```ts
+const res = await fetch(`https://sportybetcodeautomation.onrender.com/api/payment/verify/${reference}`);
+const result = await res.json();
+
+if (result.success && result.status === 'paid') {
+  // Re-fetch subscription status; VIP is now active on web and Telegram!
+}
+```
+
+#### Step 4: Generate SportyBet Booking Codes
+```ts
+const res = await fetch('https://sportybetcodeautomation.onrender.com/api/generate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    sport: 'football', // 'football' (~10 odds), 'efootball' (in-play), or 'vfootball'
+    userId: user._id || user.email
+  })
+});
+
+const data = await res.json();
+if (data.success && data.codes?.length > 0) {
+  const code = data.codes[0].code; // e.g. "BC7X92K"
+  const url = data.codes[0].url;   // e.g. "https://www.sportybet.com/ng/?shareCode=BC7X92K"
+  const odds = data.codes[0].odds; // e.g. 10.45
+}
+```
+
+#### Step 5: Quest Special (Live Virtual Sniper)
+Quest Special is a real-time live background sniper for virtual football. Matches are sniped at exact clock marks with buffered staking time before whistles blow:
+```ts
+// 1. Start background scan:
+await fetch('https://sportybetcodeautomation.onrender.com/api/quest-special/start', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ userId: user._id || user.email })
+});
+
+// 2. Poll status every 3 seconds:
+const poll = setInterval(async () => {
+  const res = await fetch(`https://sportybetcodeautomation.onrender.com/api/quest-special/status/${user._id || user.email}`);
+  const status = await res.json();
+
+  if (status.lastResult && !status.lastResult.timedOut) {
+    clearInterval(poll);
+    const slip = status.lastResult;
+    console.log('Sniper Locked Match:', slip.home, 'vs', slip.away);
+    console.log('Booking Code:', slip.code);       // e.g. "GU2JGA"
+    console.log('Direct Booking URL:', slip.url); // e.g. "http://www.sportybet.com/ng/?shareCode=GU2JGA"
+    console.log('Pick:', slip.analysis.description);
+    console.log('Odds:', slip.analysis.odds);
+  }
+}, 3000);
+```
+
+---
 
 ---
 
@@ -302,38 +415,38 @@ Imminent whistle       Leader or 1st Half                  Imminent FT whistle  
 into half-time break.  favourite lock.                     into full time.       • Virtual ➔ Fav / Cushion
 ```
 
-#### Rule 1: 41 Minutes to Half Time → Dynamic Under Line (38.0′ – 42.5′)
-- **Clock Window:** ~41 virtual minutes (~76s - 85s into the 3-minute round).
+#### Rule 1: 41 Minutes to Half Time → Dynamic Under Line (38.0′ – 42.5′, Active H1)
+- **Clock Window:** 38.0′ – 42.5′ (Must be active `H1`, with 3 to 7 virtual minutes / ~60–120 real seconds of staking buffer before HT whistle).
 - **Target Line:** `Under (Current Goals + 0.5)` in Market `68` (`1st Half - Over/Under`):
   - Score is `0-0` (0 goals) ➔ **Under 0.5 HT**
   - Score is `1-0` or `0-1` (1 goal) ➔ **Under 1.5 HT**
   - Score is `1-1` or `2-0` (2 goals) ➔ **Under 2.5 HT**
-- **Reasoning:** In virtual football, closing seconds of the 1st half have virtually no goal conversion. Under `(goals + 0.5)` has an overwhelmingly safe completion rate right before the halftime break.
+- **Reasoning:** In virtual football, closing minutes of the 1st half have virtually no goal conversion. Under `(goals + 0.5)` has an overwhelmingly safe completion rate right before the halftime break.
 
-#### Rule 2: 43 Minutes → 1st Half Winner or 1st Half Draw (42.0′ – 45.5′)
-- **Clock Window:** ~43 virtual minutes (~84s - 91s into the 3-minute round).
+#### Rule 2: 43 Minutes → 1st Half Winner or 1st Half Draw (40.0′ – 43.5′, Active H1)
+- **Clock Window:** 40.0′ – 43.5′ (Must be active `H1`, preserving buffer before half-time).
 - **Market Targeted:** Market `60` (`1st Half - 1X2`).
 - **Selection:**
   - **Tied game (e.g. `0-0`, `1-1`):** Selects **1st Half Draw (X)**. Whistle is imminent and game will reach the break level.
   - **Team leading (e.g. `1-0`, `0-1`):** Selects **1st Half Winner** on the leading team.
-- **Reasoning:** Locks in the 1st Half result right before the referee sounds the halftime whistle.
+- **Reasoning:** Locks in the 1st Half result with safe time remaining before the referee sounds the halftime whistle.
 
-#### Rule 3: 85 Minutes to Full Time → Dynamic FT Under (82.0′ – 87.0′)
-- **Clock Window:** ~85 virtual minutes (~164s - 174s into the 3-minute round).
+#### Rule 3: 85 Minutes to Full Time → Dynamic FT Under (81.0′ – 85.5′, Active H2)
+- **Clock Window:** 81.0′ – 85.5′ (Must be active `H2`, with 5 to 9 virtual minutes / ~100–180 real seconds of staking buffer before full-time whistle).
 - **Target Line:** `Under (Current Goals + 0.5)` in Market `18` (`Full Time Over/Under`):
   - Score is `0-0` ➔ **Under 0.5 FT**
   - Score is `1-0` or `0-1` ➔ **Under 1.5 FT**
   - Score is `1-1` or `2-0` ➔ **Under 2.5 FT**
   - Score is `2-1` or `3-0` ➔ **Under 3.5 FT**
-- **Reasoning:** With under 15 seconds of real simulation remaining, scoring additional goals is statistically suppressed, guaranteeing a high-probability Under exit.
+- **Reasoning:** With the match entering its closing stretch, scoring is heavily suppressed, securing a high-probability Under exit while leaving ample time for the user to open and confirm the booking slip.
 
-#### Rule 4: 88 Minutes to Full Time → FT Draw, 1X2 Winner, or Handicap (86.5′ – 90.0′)
-- **Clock Window:** ~88 virtual minutes (~173s - 180s into the 3-minute round).
+#### Rule 4: 88 Minutes to Full Time → FT Draw, 1X2 Winner, or Handicap (83.0′ – 86.5′, Active H2)
+- **Clock Window:** 83.0′ – 86.5′ (Must be active `H2`).
 - **Lead-Based Logic:**
   - **Tied game (e.g. `0-0`, `1-1`, `2-2`):** Selects **Full Time Draw (X)** in Market `1`.
-  - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team. A 2-goal deficit cannot be overturned in 5 virtual seconds.
-  - **1-Goal Lead (e.g. `1-0`, `0-1`, `2-1`):** Selects **Handicap (Market `14`)** giving a +1.5 to +2.0 cushion (`hcp=2:0` or `hcp=0:2`) or 1X2 Match Winner on the leader.
-  - **Virtual Match (Silent Score):** Selects **1X2 Match Winner** on strong favorite or **Handicap with 2-goal cushion**.
+  - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team. A 2-goal deficit cannot be overturned.
+  - **1-Goal Lead (e.g. `1-0`, `0-1`, `2-1`):** Selects **Handicap (Market `14`)** giving a +1.0 to +2.0 cushion (`hcp=1:0` or `hcp=2:0`) or 1X2 Match Winner on the leader.
+  - **Virtual Match (Silent Score):** Selects **1X2 Match Winner** on strong favorite or **Handicap cushion**.
 
 ---
 
@@ -765,7 +878,7 @@ Used when a user clicks "Upgrade to VIP" on the web dashboard. Automatically lin
   "success": true,
   "reference": "VIP-6916043986-1741234567890",
   "checkoutUrl": "https://payments.questlabs.cc/pay/VIP-6916043986-1741234567890",
-  "amount": 1000,
+  "amount": 10,
   "virtualAccount": {
     "bankName": "Wema Bank / Xixapay",
     "accountNumber": "9876543210",
@@ -791,7 +904,7 @@ Called by the web frontend after the user completes payment (or clicks "I have t
   "status": "paid",
   "chatId": "6916043986",
   "reference": "VIP-6916043986-1741234567890",
-  "amount": 1000
+  "amount": 10
 }
 ```
 
