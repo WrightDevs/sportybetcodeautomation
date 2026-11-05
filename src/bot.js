@@ -79,7 +79,7 @@ const HELP = `<b>Welcome to SportyBet Daily Codes VIP!</b>\n\n`
   + `⚽ <b>Football</b> — real fixtures, ~10 odds accumulators\n`
   + `🕹 <b>eFootball</b> — in-play, leader by 3+ after 40′\n`
   + `⚡ <b>vFootball</b> — in-play & upcoming 3-min rounds\n`
-  + `🎯 <b>Quest Special</b> — live background sniper at 38′ (HT) & 80′ (Late)\n\n`
+  + `🎯 <b>Quest Special</b> — live background sniper (41′ HT Under, 43′ H1 Result, 85′ FT Under, 88′ Late Lead/Hcap)\n\n`
   + `<i>Booking codes are non-staking preparation slips.</i>`;
 
 function sendPaywall(chat) {

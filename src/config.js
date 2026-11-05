@@ -43,9 +43,9 @@ const CFG = {
   TG_CLIENT_SECRET: E('TELEGRAM_CLIENT_SECRET', E('TG_CLIENT_SECRET', '')),
   OUT_DIR: path.join(ROOT, 'codes'),
 
-  // VIP Subscription & Billing
+  // VIP Subscription & Billing (10 Naira VIP Access)
   ADMIN_ID: E('ADMIN_ID', '6916043986'),
-  SUB_PRICE: N('SUB_PRICE', 1000),
+  SUB_PRICE: N('SUB_PRICE', 10),
   SUB_DAYS: N('SUB_DAYS', 7),
   WEBHOOK_PORT: N('PORT', N('WEBHOOK_PORT', 3000)),
   QUESTPAY_LINK: E('QUESTPAY_LINK', ''),
@@ -54,7 +54,11 @@ const CFG = {
   QUESTPAY_WEBHOOK_SECRET: E('QUESTPAY_WEBHOOK_SECRET', ''),
   BANK_NAME: E('BANK_NAME', 'OPay'),
   ACCOUNT_NUMBER: E('ACCOUNT_NUMBER', ''),
-  ACCOUNT_NAME: E('ACCOUNT_NAME', '')
+  ACCOUNT_NAME: E('ACCOUNT_NAME', ''),
+
+  // MongoDB Atlas Database Connection (Zero data loss across deploys)
+  MONGODB_URI: E('MONGODB_URI', E('MONGO_URL', E('DATABASE_URL', 'mongodb+srv://giftjacksun_db_user:RWSadh1hEdJrJBgX@cluster0.2rcvw7a.mongodb.net/app'))),
+  MONGO_DB_NAME: E('MONGO_DB_NAME', 'app')
 };
 
 CFG.VIRTUAL = CFG.SPORTS.some(s => s !== 'sr:sport:1');

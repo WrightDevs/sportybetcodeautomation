@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { CFG } = require('./config');
 const { parseQuestPayWebhook, initializeQuestPayCheckout, verifyQuestPayCheckout } = require('./questpay');
 const { addSubscription, getSubscription, isSubscribed } = require('./subs');
+const { getSubscriber, findUser } = require('./db');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
 const { PRESETS } = require('./presets');
@@ -323,19 +324,28 @@ function startWebhookServer(onPaymentActivated) {
     // Subscription Status API: GET /api/subscription/:userId
     if (req.method === 'GET' && req.url.startsWith('/api/subscription/')) {
       const userId = decodeURIComponent(req.url.slice('/api/subscription/'.length).split('?')[0]);
-      const sub = getSubscription(userId);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({
-        success: true,
-        userId,
-        subscription: {
-          active: sub.active,
-          isAdmin: !!sub.isAdmin,
-          daysLeft: sub.daysLeft,
-          expiresAt: sub.expiresAt || null,
-          expDate: sub.expDate || null
+      (async () => {
+        let sub = getSubscription(userId);
+        if (!sub || !sub.active) {
+          const deep = await getSubscriber(userId);
+          if (deep && Number(deep.expiresAt) > Date.now()) {
+            sub = getSubscription(userId);
+          }
         }
-      }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          userId,
+          subscription: {
+            active: !!sub.active,
+            isAdmin: !!sub.isAdmin,
+            daysLeft: sub.daysLeft || 0,
+            expiresAt: sub.expiresAt || null,
+            expDate: sub.expDate || null
+          }
+        }));
+      })();
+      return;
     }
 
     // Web Payment Checkout Initialization: POST /api/payment/initialize
@@ -349,17 +359,19 @@ function startWebhookServer(onPaymentActivated) {
         let payload = {};
         try { payload = JSON.parse(bodyStr); } catch (_) {}
 
-        const telegramId = payload.telegramId || payload.chatId || payload.userId;
-        if (!telegramId) {
+        const rawId = payload.telegramId || payload.chatId || payload.userId || payload.email;
+        if (!rawId) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             success: false,
-            error: 'telegramId is required to link payment to Telegram account'
+            error: 'User ID, Email, or Telegram ID is required to initialize payment'
           }));
         }
 
-        const email = payload.email || `user_${telegramId}@gmail.com`;
-        const checkout = await initializeQuestPayCheckout(telegramId, email);
+        const userDoc = await findUser(rawId);
+        const effectiveChatId = userDoc?.telegramId || payload.telegramId || payload.chatId || payload.userId || rawId;
+        const email = payload.email || userDoc?.email || `user_${effectiveChatId}@gmail.com`;
+        const checkout = await initializeQuestPayCheckout(effectiveChatId, email);
 
         if (!checkout.ok) {
           res.writeHead(500, { 'Content-Type': 'application/json' });

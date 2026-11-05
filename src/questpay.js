@@ -15,7 +15,7 @@ async function initializeQuestPayCheckout(chatId, email = null) {
   // Use a valid email domain (@gmail.com) as QuestPay payment providers (Xixapay) validate MX records
   const userEmail = email || `user_${chatId}@gmail.com`;
   const reference = `VIP-${chatId}-${Date.now()}`;
-  const amount = Number(CFG.SUB_PRICE) || 1000;
+  const amount = Number(CFG.SUB_PRICE) || 10;
 
   try {
     const r = await fetch(`${BASE_URL}/v1/checkout/initialize`, {

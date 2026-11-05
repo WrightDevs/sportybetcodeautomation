@@ -137,7 +137,7 @@ When using standard OAuth2 / OpenID Connect authorization code redirect flow:
 The system unifies identity using the **Telegram User ID** (`chatId`, e.g. `6916043986`). Because MongoDB persists subscribers under this unique ID, payments made on either platform instantly unlock both:
 
 #### Scenario A: User pays inside the Telegram Bot ➔ Opens Website
-1. User pays ₦1,000 on Telegram via the bot (`/pay` or QuestPay link).
+1. User pays ₦10 on Telegram via the bot (`/pay` or QuestPay link).
 2. The payment webhook saves their subscription under their Telegram ID: `6916043986`.
 3. User opens the website dashboard and clicks **"Log In with Telegram"**.
 4. The dashboard calls `POST /api/auth/telegram`.
@@ -152,7 +152,7 @@ The system unifies identity using the **Telegram User ID** (`chatId`, e.g. `6916
 5. QuestPay webhook fires or web verification runs:
    - Backend marks `6916043986` as VIP active in MongoDB.
    - The Telegram bot sends a direct message to the user on Telegram:
-     *`🎉 Payment of ₦1,000 received! Your VIP subscription has been activated for 7 days!`*
+     *`🎉 Payment of ₦10 received! Your VIP subscription has been activated for 7 days!`*
 6. **Result:** User immediately gets VIP on both the website and Telegram!
 
 #### Scenario C: Website has existing Email/Password Auth

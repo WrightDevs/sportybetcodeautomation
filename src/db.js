@@ -16,27 +16,89 @@ const SLIPS_FILE = path.join(DATA_DIR, 'slips.json');
 // Ensure local directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Environment credentials for databases
+// Environment credentials for databases (Always fallback to Atlas Cloud app database)
+const MONGO_FALLBACK = 'mongodb+srv://giftjacksun_db_user:RWSadh1hEdJrJBgX@cluster0.2rcvw7a.mongodb.net/app';
 const RAW_DB_URL = process.env.DATABASE_URL || '';
-const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URL || (RAW_DB_URL.startsWith('mongodb') ? RAW_DB_URL : '');
+const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URL || CFG.MONGODB_URI || (RAW_DB_URL.startsWith('mongodb') ? RAW_DB_URL : MONGO_FALLBACK);
+const MONGO_DB_NAME = process.env.MONGO_DB_NAME || CFG.MONGO_DB_NAME || 'app';
+
 const POSTGRES_URL = RAW_DB_URL.startsWith('postgres') ? RAW_DB_URL : '';
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
 
-// In-memory cache for sub-millisecond lookups
-const subCache = new Map(); // chatId -> { expiresAt, updatedAt, meta }
+// In-memory cache for sub-millisecond lookups across all aliases
+const subCache = new Map(); // identifier (chatId, email, _id, username) -> { expiresAt, updatedAt, meta }
 
 let mongoClient = null;
 let mongoDb = null;
 let subscribersCol = null;
+let usersCol = null;
 let slipsCol = null;
 let isMongoReady = false;
+let mongoConnectPromise = null;
+
+async function ensureMongo() {
+  if (mongoConnectPromise) {
+    try { await mongoConnectPromise; } catch (_) {}
+  }
+}
 
 let pgPool = null;
 let isPgReady = false;
 
 // ----------------------------------------------------
-// 1. MongoDB Initialization (Top Priority)
+// 1. Local File Helpers (Safety Fallback)
+// ----------------------------------------------------
+function loadLocalSubscribers() {
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) || {};
+    }
+  } catch (_) {}
+  return {};
+}
+
+function saveLocalSubscribers(db) {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+// Initial warm up from local backup
+const localData = loadLocalSubscribers();
+for (const [id, data] of Object.entries(localData)) {
+  subCache.set(String(id), data);
+}
+
+// ----------------------------------------------------
+// 2. User Profile Multi-Key Resolution
+// ----------------------------------------------------
+async function findUser(q) {
+  if (!q) return null;
+  const str = String(q).trim();
+  if (!str) return null;
+
+  await ensureMongo();
+
+  if (isMongoReady && usersCol) {
+    try {
+      const { ObjectId } = require('mongodb');
+      const orList = [
+        { telegramId: str },
+        { email: str.toLowerCase() },
+        { username: str.toLowerCase() }
+      ];
+      if (ObjectId.isValid(str) && str.length === 24) {
+        orList.push({ _id: new ObjectId(str) });
+      }
+      return await usersCol.findOne({ $or: orList });
+    } catch (_) {}
+  }
+  return null;
+}
+
+// ----------------------------------------------------
+// 3. MongoDB Initialization (Persistent Cloud Atlas)
 // ----------------------------------------------------
 if (MONGO_URI) {
   try {
@@ -46,44 +108,85 @@ if (MONGO_URI) {
       connectTimeoutMS: 8000
     });
 
-    (async () => {
+    mongoConnectPromise = (async () => {
       try {
         await mongoClient.connect();
-        mongoDb = process.env.MONGO_DB_NAME ? mongoClient.db(process.env.MONGO_DB_NAME) : mongoClient.db();
-        const dbName = mongoDb.databaseName || 'sportybet';
+        mongoDb = mongoClient.db(MONGO_DB_NAME);
+        const dbName = mongoDb.databaseName || 'app';
         subscribersCol = mongoDb.collection('subscribers');
+        usersCol = mongoDb.collection('users');
         slipsCol = mongoDb.collection('slips');
 
         // Ensure indices for performance
         await subscribersCol.createIndex({ chatId: 1 }, { unique: true }).catch(() => {});
         await slipsCol.createIndex({ shareCode: 1 }).catch(() => {});
         await slipsCol.createIndex({ userId: 1 }).catch(() => {});
+        await usersCol.createIndex({ telegramId: 1 }).catch(() => {});
+        await usersCol.createIndex({ email: 1 }).catch(() => {});
 
         isMongoReady = true;
-        console.log(`✅ MongoDB connected successfully to database: "${dbName}"`);
+        console.log(`✅ MongoDB Atlas connected successfully to database: "${dbName}"`);
 
-        // Warm up in-memory cache from MongoDB
-        const cursor = subscribersCol.find({});
-        for await (const doc of cursor) {
-          subCache.set(String(doc.chatId), {
+        // 1. Warm up in-memory cache directly from MongoDB subscribers collection
+        const allDocs = await subscribersCol.find({}).toArray();
+        for (const doc of allDocs) {
+          const entry = {
             chatId: String(doc.chatId),
             expiresAt: Number(doc.expiresAt),
-            updatedAt: Number(doc.updatedAt),
-            ...doc.meta
-          });
+            updatedAt: Number(doc.updatedAt || Date.now()),
+            ...(doc.meta || {})
+          };
+          subCache.set(String(doc.chatId), entry);
         }
 
-        // Auto-migrate any local subscribers into MongoDB
+        // 2. Cross-link and sync with all user profiles in MongoDB users collection
+        const allUsers = await usersCol.find({}).toArray();
+        for (const user of allUsers) {
+          const tId = user.telegramId ? String(user.telegramId) : null;
+          const uId = user._id ? user._id.toString() : null;
+          const uEmail = user.email ? String(user.email).toLowerCase() : null;
+          const uName = user.username ? String(user.username).toLowerCase() : null;
+
+          // Check if user has active subscription under any key
+          let activeSub = null;
+          for (const k of [tId, uId, uEmail, uName]) {
+            if (k && subCache.has(k)) {
+              const s = subCache.get(k);
+              if (s && Number(s.expiresAt) > Date.now()) {
+                activeSub = s;
+                break;
+              }
+            }
+          }
+
+          if (activeSub) {
+            // Mirror active subscription to ALL connected profile keys
+            const keys = [tId, uId, uEmail, uName].filter(Boolean);
+            for (const key of keys) {
+              subCache.set(key, activeSub);
+            }
+            // Update user document in MongoDB users collection
+            await usersCol.updateOne(
+              { _id: user._id },
+              { $set: { isVip: true, vipExpiresAt: activeSub.expiresAt, updatedAt: new Date() } }
+            ).catch(() => {});
+          }
+        }
+
+        // 3. Auto-migrate any local subscribers into MongoDB
         const localSubs = loadLocalSubscribers();
         for (const [chatId, data] of Object.entries(localSubs)) {
-          await subscribersCol.updateOne(
-            { chatId: String(chatId) },
-            { $set: { chatId: String(chatId), expiresAt: data.expiresAt, updatedAt: data.updatedAt || Date.now(), meta: data } },
-            { upsert: true }
-          ).catch(() => {});
+          if (!subCache.has(String(chatId))) {
+            await subscribersCol.updateOne(
+              { chatId: String(chatId) },
+              { $set: { chatId: String(chatId), expiresAt: data.expiresAt, updatedAt: data.updatedAt || Date.now(), meta: data } },
+              { upsert: true }
+            ).catch(() => {});
+            subCache.set(String(chatId), data);
+          }
         }
       } catch (err) {
-        console.error('MongoDB connection error, falling back to local storage:', err.message);
+        console.error('MongoDB Atlas connection error, using local storage fallback:', err.message);
       }
     })();
   } catch (err) {
@@ -92,7 +195,7 @@ if (MONGO_URI) {
 }
 
 // ----------------------------------------------------
-// 2. PostgreSQL Initialization (Secondary)
+// 4. PostgreSQL Initialization (Secondary)
 // ----------------------------------------------------
 if (!MONGO_URI && POSTGRES_URL) {
   try {
@@ -113,22 +216,9 @@ if (!MONGO_URI && POSTGRES_URL) {
             updated_at BIGINT NOT NULL,
             meta JSONB DEFAULT '{}'::jsonb
           );
-          CREATE TABLE IF NOT EXISTS slips (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            share_code TEXT NOT NULL,
-            sport TEXT NOT NULL,
-            total_odds NUMERIC(8,2) NOT NULL,
-            status TEXT DEFAULT 'pending',
-            legs JSONB NOT NULL DEFAULT '[]'::jsonb,
-            url TEXT,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            settled_at TIMESTAMPTZ
-          );
         `);
         client.release();
         isPgReady = true;
-        console.log('✅ PostgreSQL connected and initialized');
 
         const res = await pgPool.query('SELECT * FROM subscribers');
         for (const row of res.rows) {
@@ -149,48 +239,33 @@ if (!MONGO_URI && POSTGRES_URL) {
 }
 
 // ----------------------------------------------------
-// 3. Local File Helpers (Safety Fallback)
-// ----------------------------------------------------
-function loadLocalSubscribers() {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) || {};
-    }
-  } catch (_) {}
-  return {};
-}
-
-function saveLocalSubscribers(db) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
-  } catch (_) {}
-}
-
-// Warm up local cache
-const localData = loadLocalSubscribers();
-for (const [id, data] of Object.entries(localData)) {
-  subCache.set(String(id), data);
-}
-
-// ----------------------------------------------------
-// 4. Universal Operations (Subscribers)
+// 5. Universal Operations (Subscribers & Profile 2-Way Sync)
 // ----------------------------------------------------
 
 async function getSubscriber(chatId) {
-  const id = String(chatId);
+  if (!chatId) return null;
+  const id = String(chatId).trim();
+  const now = Date.now();
+
+  // 1. In-memory check
   if (subCache.has(id)) {
-    return subCache.get(id);
+    const cached = subCache.get(id);
+    if (cached && Number(cached.expiresAt) > now) {
+      return cached;
+    }
   }
 
-  // 1. MongoDB
+  await ensureMongo();
+
+  // 2. Direct MongoDB subscribers collection lookup
   if (isMongoReady && subscribersCol) {
     try {
       const doc = await subscribersCol.findOne({ chatId: id });
-      if (doc) {
+      if (doc && Number(doc.expiresAt) > now) {
         const data = {
           chatId: id,
           expiresAt: Number(doc.expiresAt),
-          updatedAt: Number(doc.updatedAt),
+          updatedAt: Number(doc.updatedAt || now),
           ...(doc.meta || {})
         };
         subCache.set(id, data);
@@ -199,41 +274,53 @@ async function getSubscriber(chatId) {
     } catch (_) {}
   }
 
-  // 2. PostgreSQL
-  if (isPgReady && pgPool) {
+  // 3. User profile resolution (Cross-sync: email, _id, telegramId, username)
+  if (isMongoReady && usersCol) {
     try {
-      const res = await pgPool.query('SELECT * FROM subscribers WHERE chat_id = $1 LIMIT 1', [id]);
-      if (res.rows.length) {
-        const row = res.rows[0];
-        const data = {
-          chatId: id,
-          expiresAt: Number(row.expires_at),
-          updatedAt: Number(row.updated_at),
-          ...row.meta
-        };
-        subCache.set(id, data);
-        return data;
-      }
-    } catch (_) {}
-  }
+      const user = await findUser(id);
+      if (user) {
+        const tId = user.telegramId ? String(user.telegramId) : null;
+        const uId = user._id ? user._id.toString() : null;
+        const uEmail = user.email ? String(user.email).toLowerCase() : null;
+        const uName = user.username ? String(user.username).toLowerCase() : null;
 
-  // 3. Supabase REST
-  if (SUPABASE_URL && SUPABASE_KEY) {
-    try {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.${encodeURIComponent(id)}&select=*`, {
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-      });
-      const rows = await r.json();
-      if (Array.isArray(rows) && rows.length > 0) {
-        const row = rows[0];
-        const data = {
-          chatId: id,
-          expiresAt: Number(row.expires_at),
-          updatedAt: Number(row.updated_at),
-          ...(row.meta || {})
-        };
-        subCache.set(id, data);
-        return data;
+        // Check if ANY linked alias has active VIP
+        const candidates = [tId, uId, uEmail, uName].filter(Boolean);
+        for (const cand of candidates) {
+          if (subCache.has(cand)) {
+            const s = subCache.get(cand);
+            if (s && Number(s.expiresAt) > now) {
+              // Replicate to all aliases
+              for (const k of candidates) subCache.set(k, s);
+              return s;
+            }
+          }
+          if (subscribersCol) {
+            const doc = await subscribersCol.findOne({ chatId: cand });
+            if (doc && Number(doc.expiresAt) > now) {
+              const data = {
+                chatId: cand,
+                expiresAt: Number(doc.expiresAt),
+                updatedAt: Number(doc.updatedAt || now),
+                ...(doc.meta || {})
+              };
+              for (const k of candidates) subCache.set(k, data);
+              return data;
+            }
+          }
+        }
+
+        // Check if user document itself has active vipExpiresAt
+        if (user.vipExpiresAt && Number(user.vipExpiresAt) > now) {
+          const data = {
+            chatId: id,
+            expiresAt: Number(user.vipExpiresAt),
+            updatedAt: now,
+            isVip: true
+          };
+          for (const k of candidates) subCache.set(k, data);
+          return data;
+        }
       }
     } catch (_) {}
   }
@@ -242,7 +329,8 @@ async function getSubscriber(chatId) {
 }
 
 async function saveSubscriber(chatId, expiresAt, meta = {}) {
-  const id = String(chatId);
+  await ensureMongo();
+  const id = String(chatId).trim();
   const data = {
     chatId: id,
     expiresAt: Number(expiresAt),
@@ -258,7 +346,7 @@ async function saveSubscriber(chatId, expiresAt, meta = {}) {
   local[id] = data;
   saveLocalSubscribers(local);
 
-  // 3. MongoDB
+  // 3. MongoDB subscribers collection
   if (isMongoReady && subscribersCol) {
     try {
       await subscribersCol.updateOne(
@@ -271,48 +359,44 @@ async function saveSubscriber(chatId, expiresAt, meta = {}) {
     }
   }
 
-  // 4. PostgreSQL
-  if (isPgReady && pgPool) {
+  // 4. Cross-sync: Link to MongoDB users collection (unifies web + bot)
+  if (isMongoReady && usersCol) {
     try {
-      await pgPool.query(`
-        INSERT INTO subscribers (chat_id, expires_at, updated_at, meta)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (chat_id) DO UPDATE SET
-          expires_at = EXCLUDED.expires_at,
-          updated_at = EXCLUDED.updated_at,
-          meta = EXCLUDED.meta
-      `, [id, data.expiresAt, data.updatedAt, JSON.stringify(meta)]);
-    } catch (e) {
-      console.error('Failed to save subscriber to PostgreSQL:', e.message);
-    }
-  }
+      const user = await findUser(id);
+      if (user) {
+        const tId = user.telegramId ? String(user.telegramId) : null;
+        const uId = user._id ? user._id.toString() : null;
+        const uEmail = user.email ? String(user.email).toLowerCase() : null;
+        const uName = user.username ? String(user.username).toLowerCase() : null;
 
-  // 5. Supabase REST
-  if (SUPABASE_URL && SUPABASE_KEY) {
-    try {
-      await fetch(`${SUPABASE_URL}/rest/v1/subscribers`, {
-        method: 'POST',
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=merge-duplicates'
-        },
-        body: JSON.stringify({
-          chat_id: id,
-          expires_at: data.expiresAt,
-          updated_at: data.updatedAt,
-          meta
-        })
-      });
-    } catch (_) {}
+        const aliases = [tId, uId, uEmail, uName].filter(Boolean);
+        for (const alias of aliases) {
+          subCache.set(alias, data);
+          if (subscribersCol && alias !== id) {
+            await subscribersCol.updateOne(
+              { chatId: alias },
+              { $set: { chatId: alias, expiresAt: data.expiresAt, updatedAt: data.updatedAt, meta } },
+              { upsert: true }
+            ).catch(() => {});
+          }
+        }
+
+        // Mark user document in users collection as VIP
+        await usersCol.updateOne(
+          { _id: user._id },
+          { $set: { isVip: true, vipExpiresAt: data.expiresAt, updatedAt: new Date() } }
+        ).catch(() => {});
+      }
+    } catch (e) {
+      console.error('Failed to cross-sync user profile in MongoDB:', e.message);
+    }
   }
 
   return data;
 }
 
 async function removeSubscriber(chatId) {
-  const id = String(chatId);
+  const id = String(chatId).trim();
   subCache.delete(id);
 
   const local = loadLocalSubscribers();
@@ -323,16 +407,15 @@ async function removeSubscriber(chatId) {
     try { await subscribersCol.deleteOne({ chatId: id }); } catch (_) {}
   }
 
-  if (isPgReady && pgPool) {
-    try { await pgPool.query('DELETE FROM subscribers WHERE chat_id = $1', [id]); } catch (_) {}
-  }
-
-  if (SUPABASE_URL && SUPABASE_KEY) {
+  if (isMongoReady && usersCol) {
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-      });
+      const user = await findUser(id);
+      if (user) {
+        await usersCol.updateOne(
+          { _id: user._id },
+          { $set: { isVip: false, vipExpiresAt: 0, updatedAt: new Date() } }
+        ).catch(() => {});
+      }
     } catch (_) {}
   }
 
@@ -340,9 +423,8 @@ async function removeSubscriber(chatId) {
 }
 
 // ----------------------------------------------------
-// 5. Universal Operations (Slips for Analytics)
+// 6. Universal Operations (Slips for Analytics)
 // ----------------------------------------------------
-
 async function syncSlipToDb(slip) {
   if (isMongoReady && slipsCol) {
     try {
@@ -361,6 +443,7 @@ module.exports = {
   getSubscriber,
   saveSubscriber,
   removeSubscriber,
+  findUser,
   syncSlipToDb,
   subCache
 };
