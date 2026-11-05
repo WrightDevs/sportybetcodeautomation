@@ -84,9 +84,10 @@ function getOutcome(m, outcomeId) {
   return (!isNaN(odds) && odds >= 1.01) ? { outcome: o, odds } : null;
 }
 
-// ── Timing Rule 1: 41′ HT Under (Window: 39′ – 47′) ──
+// ── Timing Rule 1: 41′ HT Under (Window: 38′ – 42.5′, must be H1) ──
 function checkHTUnder(ev, min, sc) {
-  if (min < 39.0 || min > 47.0) return null;
+  // Guard: must be in active first half with safe buffer before half-time whistle
+  if (ev.matchStatus !== 'H1' || min < 38.0 || min > 42.5) return null;
 
   const total = sc.h + sc.a;
   const targetLine = total + 0.5;
@@ -146,9 +147,9 @@ function checkHTUnder(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 2: 43′ H1 Result / Draw (Window: 42′ – 48′) ──
+// ── Timing Rule 2: 43′ H1 Result / Draw (Window: 40′ – 43.5′, must be H1) ──
 function checkHTResult(ev, min, sc) {
-  if (min < 42.0 || min > 48.0) return null;
+  if (ev.matchStatus !== 'H1' || min < 40.0 || min > 43.5) return null;
 
   const isTied = sc.h === sc.a;
   const homeLeads = sc.h > sc.a;
@@ -201,9 +202,10 @@ function checkHTResult(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 3: 85′ FT Under (Window: 83′ – 90′) ──
+// ── Timing Rule 3: 85′ FT Under (Window: 81′ – 85.5′, must be H2) ──
 function checkFTUnder(ev, min, sc) {
-  if (min < 83.0 || min > 90.0) return null;
+  // Guard: must be in active second half with safe buffer before full-time whistle
+  if (ev.matchStatus !== 'H2' || min < 81.0 || min > 85.5) return null;
 
   const total = sc.h + sc.a;
   const targetLine = total + 0.5;
@@ -237,9 +239,9 @@ function checkFTUnder(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 4: 88′ FT Draw / Late Lead / Handicap (Window: 86′ – 93′) ──
+// ── Timing Rule 4: 88′ FT Draw / Late Lead / Handicap (Window: 83′ – 86.5′, must be H2) ──
 function checkFTResult(ev, min, sc) {
-  if (min < 86.0 || min > 93.0) return null;
+  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 86.5) return null;
 
   const margin = Math.abs(sc.h - sc.a);
   const isTied = sc.h === sc.a;
@@ -350,26 +352,34 @@ function checkFTResult(ev, min, sc) {
 }
 
 // ── Fetch Live Matches ─────────────────────────────────
-async function fetchLiveVFootball() {
+async function fetchLiveVFootball(tries = 3) {
   const url = `https://www.sportybet.com/api/${CC}/factsCenter/liveOrPrematchEvents`
     + `?sportId=${encodeURIComponent(SPORT)}&marketId=${MARKETS}&pageSize=100&pageNum=1`;
 
-  const res = await fetch(url, { headers: BASE_HEADERS });
-  if (!res.ok) return [];
-  const j = await res.json();
-  if (j.bizCode !== 10000) return [];
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url, { headers: BASE_HEADERS });
+      if (!res.ok) continue;
+      const j = await res.json();
+      if (j.bizCode !== 10000) continue;
 
-  const tours = Array.isArray(j.data) ? j.data : (j.data && j.data.tournaments) || [];
-  const out = [];
-  for (const t of tours) {
-    for (const ev of t.events || []) {
-      // Invariant: status === 1 means live match currently in progress
-      if (ev.status === 1 && !ev.banned) {
-        out.push({ ...ev, league: t.name || t.categoryName || 'vFootball' });
+      const tours = Array.isArray(j.data) ? j.data : (j.data && j.data.tournaments) || [];
+      const out = [];
+      for (const t of tours) {
+        for (const ev of t.events || []) {
+          // Invariant: status === 1 means live match currently in progress
+          if (ev.status === 1 && !ev.banned) {
+            out.push({ ...ev, league: t.name || t.categoryName || 'vFootball' });
+          }
+        }
       }
+      return out;
+    } catch (e) {
+      if (i === tries - 1) return [];
+      await sleep(500 * (i + 1));
     }
   }
-  return out;
+  return [];
 }
 
 // ── Minting Live Booking Slips ─────────────────────────
