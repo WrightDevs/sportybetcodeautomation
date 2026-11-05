@@ -358,11 +358,12 @@ function analyze88_LateLead(ev, minute, h, a) {
 // ── Fetch & Scan ──────────────────────────────────────
 
 async function fetchLiveVFootball() {
-  const sports = ['sr:sport:202120001', 'sr:sport:137'];
+  // Strictly Scheduled vFootball (England League, Spain League, Germany League, Italy League) - 3-min format
+  const sports = ['sr:sport:202120001'];
   const events = [];
 
   for (const sport of sports) {
-    for (let page = 1; page <= 3; page++) {
+    for (let page = 1; page <= 5; page++) {
       const url = `${API}/factsCenter/pcUpcomingEvents?sportId=${encodeURIComponent(sport)}`
         + `&marketId=${QS_MARKET_IDS}&pageSize=50&pageNum=${page}`
         + `&option=1&order=0&todayGames=false&timeline=1&_t=${Date.now()}`;
