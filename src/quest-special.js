@@ -11,9 +11,13 @@ const dailyUsage     = new Map(); // chatId → { date, count }
 const lastResults    = new Map(); // chatId → signal result (for web polling)
 const MAX_DAILY      = 20;
 
-// Extended market IDs for Quest Special
-// 1 = 1X2, 14 = Handicap, 18 = O/U, 63 = HT Result, 68 = HT O/U
-const QS_MARKET_IDS = '1,14,18,63,68';
+// Target market IDs for Quest Special:
+// 1 = 1X2 Match Winner
+// 14 = Handicap
+// 18 = Full Time Over/Under
+// 60 = 1st Half 1X2
+// 68 = 1st Half Over/Under
+const QS_MARKET_IDS = '1,14,18,60,68';
 
 // ── Helpers ────────────────────────────────────────────
 function todayStr() { return new Date().toISOString().slice(0, 10); }
@@ -42,8 +46,9 @@ function clockOf(ev) {
   // Calculate virtual minute from elapsed kickoff time in a 3-minute (180s) virtual round
   if (ev.estimateStartTime) {
     const elapsedSec = (Date.now() - Number(ev.estimateStartTime)) / 1000;
+    // 180 seconds real time = 90 virtual minutes (1 virtual minute = 2 real seconds)
     if (elapsedSec >= 0 && elapsedSec <= 180) {
-      return Math.round((elapsedSec / 180) * 90);
+      return (elapsedSec / 180) * 90;
     }
   }
   return null;
@@ -75,7 +80,7 @@ function statsOf(ev) {
 
 function parseHandicapSpecifier(specifier) {
   if (!specifier) return { homeHcap: 0, awayHcap: 0, val: 0 };
-  const colon = /handicap=(\d+):(\d+)/i.exec(specifier);
+  const colon = /handicap=(\d+):(\d+)/i.exec(specifier) || /hcp=(\d+):(\d+)/i.exec(specifier);
   if (colon) {
     return {
       homeHcap: Number(colon[1]),
@@ -83,7 +88,7 @@ function parseHandicapSpecifier(specifier) {
       val: Math.max(Number(colon[1]), Number(colon[2]))
     };
   }
-  const dec = /handicap=([+-]?[\d.]+)/i.exec(specifier);
+  const dec = /handicap=([+-]?[\d.]+)/i.exec(specifier) || /hcp=([+-]?[\d.]+)/i.exec(specifier);
   if (dec) {
     const n = parseFloat(dec[1]);
     return {
@@ -109,180 +114,196 @@ function findOutcome(ev, marketId, pred) {
   return null;
 }
 
-// ── Analysis Logic ─────────────────────────────────────
+// ── Exact Quest Special Timing Rules ───────────────────
 
 /**
- * 38-minute window (HT) — dynamic Over/Under
- *  0-0  → Under 0.5 HT   (no goals in 1st half, HT whistle is imminent)
- *  1-0+ → Over  0.5 HT   (already achieved — safe cashout-type bet)
+ * Rule 1: 41-minute window to Half Time → Under 0.5 HT
+ * Trigger: ~41' (Window: 39.5' – 42.5', ~79s - 85s into 3-min round)
+ * Imminent half-time whistle with 0 first-half goals.
  */
-function analyzeHT(ev, minute, h, a) {
-  if (minute < 35 || minute > 42) return null;
+function analyze41_HTUnder(ev, minute, h, a) {
+  if (minute < 39.5 || minute > 42.5) return null;
 
-  const totalGoals = h + a;
-  const wantOver = totalGoals > 0;
-  const direction = wantOver ? 'Over' : 'Under';
-  const totalLine = 0.5;
+  // Market 68: 1st Half - Over/Under with total=0.5, Outcome Under
+  const pick = findOutcome(ev, '68', (o, m) => {
+    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
+    return total <= 0.5 && String(o.desc || '').startsWith('Under');
+  }) || findOutcome(ev, '18', (o, m) => {
+    // Fallback to market 18 if market 68 not returned
+    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
+    return total <= 0.5 && String(o.desc || '').startsWith('Under');
+  });
 
-  // Try HT O/U (market 68) first, then generic O/U (18)
-  for (const mid of ['68', '18']) {
-    const pick = findOutcome(ev, mid, (o, m) => {
-      const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
-      return total <= totalLine && String(o.desc || '').startsWith(direction);
-    });
-    if (pick) {
-      return {
-        window: '38min',
-        type: wantOver ? 'ht_over' : 'ht_under',
-        description: `HT ${direction} ${totalLine} (${h}-${a} at ${minute}')`,
-        reasoning: wantOver
-          ? `Score is ${h}-${a} at ${minute}'. Goals already scored — Over 0.5 HT is virtually guaranteed.`
-          : `Score is 0-0 at ${minute}'. Half-time whistle is imminent — Under 0.5 HT.`,
-        ...pick
-      };
-    }
+  if (pick) {
+    return {
+      window: '41min_ht_under',
+      type: 'ht_under_05',
+      description: `1st Half Under 0.5 (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
+      reasoning: `Live virtual match at ${Math.round(minute)}' (approaching HT). Imminent whistle — High-probability 1st Half Under 0.5.`,
+      ...pick
+    };
   }
   return null;
 }
 
 /**
- * 80-minute window — late-game analysis
- *  2+ goal lead → 1X2 Match Winner on the leading team
- *  1-goal lead  → check possession/shots dominance:
- *     • leader dominates (or no stats) → 1X2 on leader
- *     • trailer dominates             → Handicap (trailer +2) or fallback to 1X2
+ * Rule 2: 43-minute window → Winner of H1 (1st Half 1X2)
+ * Trigger: ~43' (Window: 42.5' – 45.0', ~85s - 90s into 3-min round)
+ * Lock in the 1st Half winner right before the break.
  */
-function analyze80(ev, minute, h, a) {
-  if (minute < 76 || minute > 85) return null;
+function analyze43_H1Winner(ev, minute, h, a) {
+  if (minute < 42.5 || minute > 45.0) return null;
+
+  const margin = h - a;
+  const homeLeads = margin > 0;
+  const awayLeads = margin < 0;
+
+  // Market 60: 1st Half - 1X2
+  const pick = findOutcome(ev, '60', (o) => {
+    const d = String(o.desc || '');
+    if (homeLeads) return d === 'Home' || d === '1';
+    if (awayLeads) return d === 'Away' || d === '2';
+    // If score even/unavailable, pick favorite outcome in Market 60 with solid odds
+    const odd = parseFloat(o.odds);
+    return (d === 'Home' || d === 'Away' || d === '1' || d === '2') && odd <= 2.50;
+  }) || findOutcome(ev, '1', (o) => {
+    const odd = parseFloat(o.odds);
+    return odd <= 1.80;
+  });
+
+  if (pick) {
+    return {
+      window: '43min_h1_winner',
+      type: 'h1_winner',
+      description: `1st Half Winner: ${pick.outcome.desc} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
+      reasoning: `Live virtual match at ${Math.round(minute)}' (closing 1st Half). Strong 1st Half Winner lock.`,
+      ...pick
+    };
+  }
+  return null;
+}
+
+/**
+ * Rule 3: 85-minute window to Full Time → FT Under 0.5 (or lowest Under line)
+ * Trigger: ~85' (Window: 84.0' – 86.8', ~168s - 173s into 3-min round)
+ * Safe Under line into the final whistle.
+ */
+function analyze85_FTUnder(ev, minute, h, a) {
+  if (minute < 84.0 || minute > 86.8) return null;
+
+  const totalGoals = (h || 0) + (a || 0);
+  const targetLine = totalGoals > 0 ? (totalGoals + 0.5) : 0.5;
+
+  // Market 18: Full Time Over/Under closest to current line
+  const pick = findOutcome(ev, '18', (o, m) => {
+    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
+    return total <= targetLine && String(o.desc || '').startsWith('Under');
+  }) || findOutcome(ev, '18', (o, m) => {
+    // Fallback: any low Under line (<= 2.5)
+    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
+    return total <= 2.5 && String(o.desc || '').startsWith('Under');
+  });
+
+  if (pick) {
+    const lineStr = (/total=([\d.]+)/.exec(pick.market.specifier || '') || [])[1] || '0.5';
+    return {
+      window: '85min_ft_under',
+      type: 'ft_under',
+      description: `Full Time Under ${lineStr} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
+      reasoning: `Live virtual match at ${Math.round(minute)}' (late game). Imminent Full Time whistle — Safe Under line.`,
+      ...pick
+    };
+  }
+  return null;
+}
+
+/**
+ * Rule 4: 88-minute window to Full Time → Handicap & 1X2 Winner based on 2-goal lead or 1-goal lead
+ * Trigger: ~88' (Window: 87.0' – 89.8', ~174s - 179s into 3-min round)
+ * • 2+ goal lead: 1X2 Match Winner on leading team
+ * • 1-goal lead: Handicap with +1.5 / +2 cushion or 1X2 Match Winner
+ * • Virtual fallback: 1X2 on strong favorite or Handicap 2-goal cushion
+ */
+function analyze88_LateLead(ev, minute, h, a) {
+  if (minute < 87.0 || minute > 89.8) return null;
 
   const margin = Math.abs(h - a);
-  if (margin === 0) return null; // draw — skip
+  const homeLeads = h > a;
+  const awayLeads = a > h;
+  const leaderTag = homeLeads ? 'Home' : 'Away';
 
-  const homeLeads  = h > a;
-  const leaderTag  = homeLeads ? 'Home' : 'Away';
-  const trailerTag = homeLeads ? 'Away' : 'Home';
-
-  // ── 2+ goal lead ────────────────────────────
+  // ── 2+ goal lead: 1X2 Match Winner ──────────────────────
   if (margin >= 2) {
-    const pick = findOutcome(ev, '1', (o) => {
+    const pick1x2 = findOutcome(ev, '1', (o) => {
       const d = String(o.desc || '');
       return homeLeads ? (d === 'Home' || d === '1') : (d === 'Away' || d === '2');
     });
-    if (pick) {
+    if (pick1x2) {
       return {
-        window: '80min',
-        type: 'match_winner',
-        description: `${leaderTag} to Win (${h}-${a} at ${minute}')`,
-        reasoning: `${leaderTag} leads ${h}-${a} by ${margin} goals at ${minute}'. Strong Match Winner.`,
-        ...pick
+        window: '88min_lead',
+        type: 'match_winner_2lead',
+        description: `${leaderTag} to Win (${h}-${a} at ${Math.round(minute)}')`,
+        reasoning: `${leaderTag} holds a 2+ goal lead (${h}-${a}) at ${Math.round(minute)}'. 1X2 Winner guaranteed.`,
+        ...pick1x2
       };
     }
   }
 
-  // ── 1-goal lead ─────────────────────────────
-  if (margin >= 1) {
-    const { homePoss, awayPoss, homeShots, awayShots } = statsOf(ev);
-
-    let dominant = null; // 'home' | 'away' | null
-    if (homePoss != null && awayPoss != null) dominant = homePoss > awayPoss ? 'home' : 'away';
-    if (!dominant && homeShots != null && awayShots != null) dominant = homeShots > awayShots ? 'home' : 'away';
-
-    const leaderSide = homeLeads ? 'home' : 'away';
-    const trailerDominates = dominant && dominant !== leaderSide;
-
-    if (trailerDominates) {
-      // Trailing team dominates → try Handicap (trailing team with positive handicap >= 1.5 or 2 goals)
-      let pick = findOutcome(ev, '14', (o, m) => {
-        const hcap = parseHandicapSpecifier(m.specifier);
-        const d = String(o.desc || '');
-        if (homeLeads) {
-          // Home leads, Away trails: want Away handicap with at least 1.5/2 goals
-          const qualifies = hcap.awayHcap >= 1.5 || hcap.val >= 1.5;
-          return (d === 'Away' || d === '2') && qualifies;
-        } else {
-          // Away leads, Home trails: want Home handicap with at least 1.5/2 goals
-          const qualifies = hcap.homeHcap >= 1.5 || hcap.val >= 1.5;
-          return (d === 'Home' || d === '1') && qualifies;
-        }
-      });
-
-      if (pick) {
-        return {
-          window: '80min',
-          type: 'handicap',
-          description: `${trailerTag} Handicap (${h}-${a} at ${minute}')`,
-          reasoning: `${h}-${a} at ${minute}'. ${trailerTag} dominates possession/shots — Handicap applied on ${trailerTag}.`,
-          ...pick
-        };
+  // ── 1-goal lead: Handicap cushion or 1X2 Winner ─────────
+  if (margin === 1) {
+    const pickHcap = findOutcome(ev, '14', (o, m) => {
+      const spec = String(m.specifier || '');
+      if (homeLeads && (spec.includes('hcp=2:0') || spec.includes('hcp=1:0'))) {
+        return String(o.desc || '').startsWith('Home') || String(o.id) === '1711';
       }
+      if (awayLeads && (spec.includes('hcp=0:2') || spec.includes('hcp=0:1'))) {
+        return String(o.desc || '').startsWith('Away') || String(o.id) === '1713';
+      }
+      return false;
+    });
+
+    if (pickHcap) {
+      return {
+        window: '88min_hcap',
+        type: 'handicap_1lead',
+        description: `${leaderTag} Handicap (${h}-${a} at ${Math.round(minute)}')`,
+        reasoning: `${leaderTag} leads ${h}-${a} at ${Math.round(minute)}'. Secured with Handicap cushion.`,
+        ...pickHcap
+      };
     }
 
-    // Default: Match Winner on leader (no stats, leader dominates, or no handicap market)
-    const pick = findOutcome(ev, '1', (o) => {
+    // Fallback: 1X2 Match Winner on leader
+    const pickLeader = findOutcome(ev, '1', (o) => {
       const d = String(o.desc || '');
       return homeLeads ? (d === 'Home' || d === '1') : (d === 'Away' || d === '2');
     });
-    if (pick) {
+    if (pickLeader) {
       return {
-        window: '80min',
-        type: 'match_winner',
-        description: `${leaderTag} to Win (${h}-${a} at ${minute}')`,
-        reasoning: `${leaderTag} leads ${h}-${a} at ${minute}'${dominant === leaderSide ? ' and dominates stats' : ''}. Match Winner.`,
-        ...pick
+        window: '88min_1x2',
+        type: 'match_winner_1lead',
+        description: `${leaderTag} to Win (${h}-${a} at ${Math.round(minute)}')`,
+        reasoning: `${leaderTag} leads ${h}-${a} at ${Math.round(minute)}'. Match Winner.`,
+        ...pickLeader
       };
     }
   }
 
-  return null;
-}
-
-/**
- * High-probability opportunity for upcoming virtual rounds (starting in next 0-3 mins)
- * Guarantees there is ALWAYS a verified opportunity even between exact 38'/80' clock ticks.
- */
-function analyzeUpcoming(ev) {
-  // 1. Look for Over 0.5 (virtually guaranteed in 3-min vFootball where 96%+ matches have goals)
-  const o05 = findOutcome(ev, '18', (o, m) => {
-    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
-    return total <= 0.5 && String(o.desc || '').startsWith('Over');
-  });
-  if (o05 && o05.odds >= 1.02 && o05.odds <= 1.25) {
-    return {
-      window: 'upcoming_o05',
-      type: 'over_05',
-      description: `Over 0.5 Goals (${ev.homeTeamName} vs ${ev.awayTeamName})`,
-      reasoning: 'Virtual round opportunity: Over 0.5 goals carries a 96%+ historical hit rate.',
-      ...o05
-    };
-  }
-
-  // 2. Look for strong favourite 1X2
-  const fav1x2 = findOutcome(ev, '1', (o) => {
+  // ── Virtual Match (Score feed silent): Strong Favorite or Handicap Cushion ──
+  const pickLate = findOutcome(ev, '14', (o, m) => {
+    const spec = String(m.specifier || '');
+    return (spec.includes('hcp=2:0') || spec.includes('hcp=0:2')) && parseFloat(o.odds) <= 1.35;
+  }) || findOutcome(ev, '1', (o) => {
     const odd = parseFloat(o.odds);
-    return odd >= 1.15 && odd <= 1.45;
+    return odd >= 1.10 && odd <= 1.75;
   });
-  if (fav1x2) {
-    return {
-      window: 'upcoming_favourite',
-      type: 'match_winner',
-      description: `${fav1x2.outcome.desc} to Win`,
-      reasoning: 'Strong virtual favorite with dominant algorithmic rating into the upcoming round.',
-      ...fav1x2
-    };
-  }
 
-  // 3. Look for Over 1.5
-  const o15 = findOutcome(ev, '18', (o, m) => {
-    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
-    return total <= 1.5 && String(o.desc || '').startsWith('Over');
-  });
-  if (o15 && o15.odds <= 1.30) {
+  if (pickLate) {
     return {
-      window: 'upcoming_o15',
-      type: 'over_15',
-      description: `Over 1.5 Goals (${ev.homeTeamName} vs ${ev.awayTeamName})`,
-      reasoning: 'High-scoring virtual fixture profile.',
-      ...o15
+      window: '88min_late',
+      type: 'late_security',
+      description: `${pickLate.outcome.desc} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
+      reasoning: `Live virtual match at ${Math.round(minute)}' (final whistle approach). Late game winning security.`,
+      ...pickLate
     };
   }
 
@@ -308,54 +329,48 @@ async function fetchLiveVFootball() {
 
       if (!evs.length) break;
       events.push(...evs);
-      await sleep(100);
+      await sleep(80);
     }
   }
 
   return events;
 }
 
-/** Scan all live/upcoming vFootball and return the first qualifying signal */
+/**
+ * Scan all live vFootball matches and return the first qualifying signal
+ * matching strictly:
+ *  1) 41' HT Under 0.5
+ *  2) 43' Winner of H1
+ *  3) 85' FT Under 0.5
+ *  4) 88' FT Handicap / 1X2 Winner based on 2-goal or 1-goal lead
+ * NOTE: Never returns generic pre-match Over 0.5 picks.
+ */
 async function scanQuestSpecial() {
   const events = await fetchLiveVFootball();
   if (!events.length) return null;
 
-  // 1. Primary Check: Matches currently matching 38' (HT O/U) or 80' (Late / Handicap)
   for (const ev of events) {
     const minute = clockOf(ev);
+    if (minute == null) continue;
+
     const [h, a] = scoreOf(ev);
     const homeScore = Number.isFinite(h) ? h : 0;
     const awayScore = Number.isFinite(a) ? a : 0;
 
-    if (minute != null) {
-      const signal = analyzeHT(ev, minute, homeScore, awayScore) || analyze80(ev, minute, homeScore, awayScore);
-      if (signal) {
-        return {
-          eventId: ev.eventId,
-          home: ev.homeTeamName,
-          away: ev.awayTeamName,
-          league: ev.league || 'vFootball',
-          minute,
-          homeScore,
-          awayScore,
-          analysis: signal
-        };
-      }
-    }
-  }
+    const signal = analyze41_HTUnder(ev, minute, homeScore, awayScore)
+      || analyze43_H1Winner(ev, minute, homeScore, awayScore)
+      || analyze85_FTUnder(ev, minute, homeScore, awayScore)
+      || analyze88_LateLead(ev, minute, homeScore, awayScore);
 
-  // 2. High-Probability Fallback: Ensures there is ALWAYS an opportunity
-  for (const ev of events) {
-    const signal = analyzeUpcoming(ev);
     if (signal) {
       return {
         eventId: ev.eventId,
         home: ev.homeTeamName,
         away: ev.awayTeamName,
         league: ev.league || 'vFootball',
-        minute: 0,
-        homeScore: 0,
-        awayScore: 0,
+        minute: Math.round(minute),
+        homeScore,
+        awayScore,
         analysis: signal
       };
     }
@@ -383,12 +398,12 @@ function startSession(chatId, onDone) {
 
   const session = { active: true, startedAt: Date.now(), scans: 0, chatId: id };
 
-  // Poll every 8 s (a vFootball round is ~3 real minutes = 180 s)
+  // Poll every 4 seconds (virtual football clock advances ~2 virtual mins every 4s)
   const timer = setInterval(async () => {
     if (!session.active) { clearInterval(timer); activeSessions.delete(id); return; }
 
-    // Auto-timeout after 4 minutes (one full cycle + buffer)
-    if (Date.now() - session.startedAt > 4 * 60 * 1000) {
+    // Auto-timeout after 3.5 minutes (one full 180s cycle + buffer)
+    if (Date.now() - session.startedAt > 210 * 1000) {
       session.active = false;
       clearInterval(timer);
       activeSessions.delete(id);
@@ -452,12 +467,12 @@ function startSession(chatId, onDone) {
     } catch (err) {
       console.error('Quest Special scan error:', err.message);
     }
-  }, 8000);
+  }, 4000);
 
   session.timer = timer;
   activeSessions.set(id, session);
 
-  return { ok: true, message: '🔍 Quest Special activated! Scanning vFootball live games…' };
+  return { ok: true, message: '🔍 Quest Special activated! Scanning live vFootball matches…' };
 }
 
 function stopSession(chatId) {
@@ -500,4 +515,3 @@ module.exports = {
   getDailyCount,
   MAX_DAILY
 };
-

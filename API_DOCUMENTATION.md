@@ -266,7 +266,7 @@ Returns metadata for all available sports to populate UI tabs and buttons.
       "id": "quest_special",
       "name": "Quest Special",
       "icon": "🎯",
-      "desc": "Live background sniper: vFootball at 38′ (HT O/U) & 80′ (Late Lead)"
+      "desc": "Live background sniper: vFootball at 41′ (HT Under), 43′ (H1 Winner), 85′ (FT Under), 88′ (Late Lead/Hcap)"
     }
   ]
 }
@@ -277,71 +277,63 @@ Returns metadata for all available sports to populate UI tabs and buttons.
 ## 3. Quest Special APIs (Live Sniper)
 
 ### Overview & Philosophy
-**Quest Special** is a specialized real-time in-play sniper engine built exclusively for **vFootball (Virtual Football)** live matches (`sr:sport:202120001`). 
+**Quest Special** is a specialized real-time in-play sniper engine built exclusively for **vFootball (Virtual Football)** live matches (`sr:sport:202120001` & `sr:sport:137`). 
 
-Unlike multi-leg accumulators, Quest Special mints **single-leg (1-leg)** high-confidence booking codes. Virtual football matches run on a compressed 3-minute cycle (90 virtual minutes simulated in ~180 real seconds). At specific inflection points—the 38th-minute approach to halftime and the 80th-minute endgame—market shapes offer temporary high-probability opportunities.
+Unlike multi-leg accumulators, Quest Special mints **single-leg (1-leg)** high-confidence booking codes. Virtual football matches run on a compressed 3-minute cycle (90 virtual minutes simulated in ~180 real seconds, where 1 virtual minute = 2 real seconds). At exact live clock intervals, high-probability betting opportunities emerge.
 
-Quest Special continuously scans live vFootball rounds in the background, identifies qualifying fixtures, immediately mints a single-leg SportyBet booking code, and delivers it to the user.
+Quest Special continuously scans live vFootball rounds in the background, identifies qualifying fixtures at exact minute marks, immediately mints a single-leg SportyBet booking code, and delivers it to the user.
 
 ---
 
-### Comprehensive Rules & Decision Logic
+### Exact Quest Special 4-Stage Live Rules & Decision Logic
 
 ```
-                           [ Live vFootball Match Detected ]
-                                          │
-                   ┌──────────────────────┴──────────────────────┐
-                   │                                             │
-          At 38 Minutes (35′ - 42′)                     At 80 Minutes (76′ - 85′)
-           Half-Time O/U Window                           Late Match & Handicap
-                   │                                             │
-         ┌─────────┴─────────┐                         ┌─────────┴─────────┐
-         │                   │                         │                   │
-    Score is 0-0       Score is 1-0+             Lead is 2+ Goals     Lead is 1 Goal
-         │                   │                    (e.g. 0-2, 3-0)     (e.g. 1-2, 2-1)
-         ▼                   ▼                         │                   │
-    [ Under 0.5 HT ]    [ Over 0.5 HT ]                ▼                   ▼
-    Whistle imminent,   Goals already locked,    [ Match Winner 1X2 ]   Check live stats:
-    no time left.       near-guaranteed hit.     Deficit insurmountable Possession & Shots
-                                                 in virtual time.          │
-                                                               ┌───────────┴───────────┐
-                                                               │                       │
-                                                      Leader Dominates      Trailer Dominates
-                                                      (or no live stats)    Possession & Shots
-                                                               │                       │
-                                                               ▼                       ▼
-                                                      [ Match Winner 1X2 ]    [ Trailer Handicap ]
-                                                      Leader holds lead.      Trailer +1.5 / +2.0
-                                                                              goals cushion.
+                             [ Live vFootball Match Detected ]
+                                             │
+      ┌─────────────────────┬────────────────┴──────────────────┬─────────────────────┐
+      │                     │                                   │                     │
+   At 41′ (HT)           At 43′ (H1)                         At 85′ (FT)           At 88′ (FT)
+  HT Under 0.5          Winner of H1                        FT Under 0.5      Late Lead & Handicap
+      │                     │                                   │                     │
+      ▼                     ▼                                   ▼                     ▼
+[ Under 0.5 HT ]       [ 1st Half 1X2 ]                    [ Under Line ]        Lead Evaluation:
+Market 68 (total=0.5)  Market 60                           Market 18 Under       • 2+ Lead ➔ 1X2 Winner
+Imminent whistle       Leader or 1st Half                  Imminent FT whistle   • 1 Lead  ➔ Handicap / 1X2
+into half-time break.  favourite lock.                     into full time.       • Virtual ➔ Fav / Cushion
 ```
 
-#### Rule 1: The 38th-Minute Half-Time Window (35′ to 42′)
-Virtual matches reach halftime at 45′ (approximately 90 seconds into the real match). Between 35′ and 42′, only 3 to 7 virtual minutes remain before the referee blows the halftime whistle:
-- **Case 1A — Score is `0-0`:**
-  - **Selection:** `Under 0.5 1st Half` (Market `68` or `18`).
-  - **Reasoning:** In virtual football, the closing moments of the first half have minimal attacking actions. A `0-0` scoreline at 38′ has an overwhelming probability of staying scoreless into the break.
-- **Case 1B — Score is `1-0`, `0-1`, `1-1` or higher:**
-  - **Selection:** `Over 0.5 1st Half` (Market `68` or `18`).
-  - **Reasoning:** Because at least one goal has already been scored, `Over 0.5 HT` is already mathematically won. If the market remains open on SportyBet, it represents a guaranteed winning leg.
+#### Rule 1: 41 Minutes to Half Time → Under 0.5 HT (39.5′ – 42.5′)
+- **Clock Window:** ~41 virtual minutes (~79s - 85s into the 3-minute round).
+- **Market Targeted:** Market `68` (1st Half - Over/Under) with `specifier: "total=0.5"`, Outcome: `Under 0.5`.
+- **Reasoning:** In virtual football, closing seconds of the 1st half have virtually no goal conversion. Under 0.5 HT has an overwhelmingly safe completion rate right before the halftime break.
 
-#### Rule 2: The 80th-Minute Endgame Window (76′ to 85′)
-With only 10 virtual minutes (less than 20 real seconds) remaining, late game dynamics are evaluated:
-- **Case 2A — Winning team is 2 or more goals ahead (e.g. `0-2`, `3-1`, `0-3`):**
-  - **Selection:** `Match Winner (1X2)` on the leading team.
-  - **Reasoning:** Scoring 2 goals in 20 real seconds against SportyBet's virtual simulation engine is statistically near-impossible. The leading team is heavily favored to close out the win.
-- **Case 2B — Winning team leads by exactly 1 goal (e.g. `1-2`, `1-0`):**
-  - The engine inspects live match statistics (Possession % and Shots on Target):
-    - **Branch 1 (Leader Dominates or Neutral):** If the leading team controls possession and shots (or if virtual stats are not broadcast), the engine selects **Match Winner (1X2)** on the leading team.
-    - **Branch 2 (Trailer Dominates):** If the trailing team has higher possession and more shots on target, they have attacking momentum. Instead of risking a draw, the engine selects **Handicap on the Trailing Team (+1.5 or +2.0 goals)** (Market `14`). Even if the trailing team loses by 1 goal or draws, the handicap bet wins.
+#### Rule 2: 43 Minutes → Winner of H1 (42.5′ – 45.0′)
+- **Clock Window:** ~43 virtual minutes (~85s - 90s into the 3-minute round).
+- **Market Targeted:** Market `60` (1st Half - 1X2).
+- **Selection:** If a team is leading, selects the leader. If tied or virtual feed has no score broadcast, selects the algorithmic 1st Half favorite (`odds <= 2.50`).
+- **Reasoning:** Locks in the 1st Half result right before the referee sounds the halftime whistle.
+
+#### Rule 3: 85 Minutes to Full Time → FT Under 0.5 (84.0′ – 86.8′)
+- **Clock Window:** ~85 virtual minutes (~168s - 173s into the 3-minute round).
+- **Market Targeted:** Market `18` (Full Time Over/Under).
+- **Selection:** If score is 0-0 or silent, selects `total=0.5 Under` (or lowest Under line <= 2.5). If score has `G` goals, selects `total = G + 0.5 Under`.
+- **Reasoning:** With under 10 seconds of real simulation remaining, scoring additional goals is statistically suppressed, guaranteeing a high-probability Under exit.
+
+#### Rule 4: 88 Minutes to Full Time → Handicap & 1X2 Winner (87.0′ – 89.8′)
+- **Clock Window:** ~88 virtual minutes (~174s - 179s into the 3-minute round).
+- **Lead-Based Logic:**
+  - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team. A 2-goal deficit cannot be overturned in 5 virtual seconds.
+  - **1-Goal Lead (e.g. `1-0`, `0-1`):** Selects **Handicap (Market `14`)** giving a 1.5 to 2.0 cushion (`hcp=2:0` or `hcp=0:2`) or 1X2 Match Winner on the leader.
+  - **Virtual Match (Silent Score):** Selects **1X2 Match Winner** on strong favorite or **Handicap with 2-goal cushion**.
 
 ---
 
 ### Operational Constraints & Lifecycle
-- **Scan Interval:** Polls SportyBet factsCenter every **8 seconds**.
-- **Execution Lifespan:** Runs for **one match round** (~3 to 4 minutes). If no match qualifies within this window, the session concludes automatically to avoid battery and network drain.
+- **Scan Interval:** Polls SportyBet factsCenter every **4 seconds**.
+- **Execution Lifespan:** Runs for **one match round** (~3.5 minutes). If no match qualifies within this window, the session concludes automatically.
 - **Daily Quota:** Limited to **20 activations per user per calendar day** (resets at 00:00 UTC).
 - **VIP Protection:** Only available to users with active VIP subscriptions. Free/expired users receive `403 Forbidden`.
-- **Boom Tracking:** Every generated slip is recorded in MongoDB with `isQuestSpecial: true` and automatically settled when the match finishes for personal win rate analytics.
+- **Boom Tracking:** Every generated slip is recorded in MongoDB with `isQuestSpecial: true` and automatically tracked for personal and global win rate analytics.
 
 ---
 

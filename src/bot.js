@@ -224,7 +224,7 @@ async function handleQuestSpecial(chat) {
     const status = getQuestSpecialStatus(chat);
     return send(chat, `⏳ <b>Quest Special is already actively scanning!</b>\n\n`
       + `• <b>Current Cycle:</b> Scan #${status.scans} (${status.runningFor}s elapsed)\n`
-      + `• <b>Target:</b> vFootball live games at 38′ (HT O/U) & 80′ (Late Match / Handicap)\n`
+      + `• <b>Target:</b> vFootball live matches (41′ HT Under 0.5 | 43′ H1 Winner | 85′ FT Under | 88′ Late Lead & Handicap)\n`
       + `• <b>Today's Quota Used:</b> ${status.dailyUsed}/${status.maxDaily}\n\n`
       + `The bot will message you the second a qualifying match is detected!`, {
       reply_markup: {
@@ -246,7 +246,7 @@ async function handleQuestSpecial(chat) {
 
   await send(chat, `🎯 <b>Quest Special Activated!</b>\n\n`
     + `📡 <b>Live Scanner:</b> Running in background\n`
-    + `🎮 <b>Target:</b> vFootball live matches (38′ HT & 80′ Late Lead)\n`
+    + `🎮 <b>Target:</b> vFootball live matches (41′ HT Under | 43′ H1 Winner | 85′ FT Under | 88′ Late Lead/Hcap)\n`
     + `🎫 <b>Format:</b> Single-leg sniper slip\n`
     + `📊 <b>Today's Quota:</b> ${dailyUsed + 1}/${QUEST_SPECIAL_MAX_DAILY}\n\n`
     + `<i>Stand by… You will receive an instant notification here the moment a qualifying match appears!</i>`, {
@@ -261,7 +261,7 @@ async function handleQuestSpecial(chat) {
   startQuestSpecial(chat, async (result, timedOut) => {
     if (timedOut) {
       return send(chat, `⏳ <b>Quest Special: Cycle Concluded</b>\n\n`
-        + `No live vFootball game reached qualifying criteria (38′ HT or 80′ Late Lead) during this 3-minute round.\n\n`
+        + `No live vFootball game reached qualifying criteria (41′ HT Under, 43′ H1 Winner, 85′ FT Under, or 88′ Late Lead/Hcap) during this 3-minute round.\n\n`
         + `Tap below to scan the next upcoming round:`, {
         reply_markup: {
           inline_keyboard: [

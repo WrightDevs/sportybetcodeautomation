@@ -209,48 +209,6 @@ function startWebhookServer(onPaymentActivated) {
       return res.end(JSON.stringify({ status: 'ok', service: 'questpay-webhook-v1', port }));
     }
 
-    // Diagnostic: Discover live inplay endpoint
-    if (req.method === 'GET' && req.url === '/api/debug/find-live') {
-      (async () => {
-        const query = 'marketId=1,18,14&pageSize=20&pageNum=1&option=1&order=0&_t=' + Date.now();
-        const testEndpoints = [
-          `factsCenter/liveSchedule?sportId=sr:sport:1&${query}`,
-          `factsCenter/liveSchedule?sportId=sr:sport:137&${query}`,
-          `factsCenter/liveSchedule?sportId=sr:sport:202120001&${query}`,
-          `factsCenter/wapLiveSchedule?sportId=sr:sport:1&${query}`,
-          `factsCenter/pcUpcomingEvents?sportId=sr:sport:1&timeline=0&${query}`,
-          `factsCenter/pcUpcomingEvents?sportId=sr:sport:137&timeline=0&${query}`,
-          `factsCenter/pcUpcomingEvents?sportId=sr:sport:202120001&timeline=0&${query}`,
-          `factsCenter/eventDetail?eventId=sr:match:200026110521077`,
-          `orders/share/BC9X2A`
-        ];
-
-        const results = {};
-        for (const ep of testEndpoints) {
-          try {
-            const url = `${API}/${ep}`;
-            const r = await fetch(url, { headers: HDR });
-            const text = await r.text();
-            let j = null;
-            try { j = JSON.parse(text); } catch (_) {}
-            results[ep.split('?')[0]] = {
-              status: r.status,
-              bizCode: j?.bizCode,
-              totalNum: j?.data?.totalNum ?? (Array.isArray(j?.data) ? j.data.length : null),
-              tournaments: (j?.data?.tournaments || []).length,
-              preview: text.slice(0, 150)
-            };
-          } catch (e) {
-            results[ep.split('?')[0]] = { err: e.message };
-          }
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: true, results }, null, 2));
-      })();
-      return;
-    }
-
     // Analytics API for Next.js Landing Page: GET /api/analytics/global
     if (req.method === 'GET' && req.url === '/api/analytics/global') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
