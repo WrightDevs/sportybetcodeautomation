@@ -291,13 +291,19 @@ async function handleQuestSpecial(chat) {
         text += `⚠️ <i>Booking code generation was busy. You can place the bet directly using the match details above!</i>`;
       }
 
+      const buttons = [];
+      if (result.url) {
+        buttons.push([{ text: `⚡ Open ${result.code || 'Slip'} in SportyBet`, url: result.url }]);
+      }
+      buttons.push(
+        [{ text: '🎯 Scan Next Match', callback_data: 'quest_special' }],
+        [{ text: '📊 My Win Rate', callback_data: 'my_stats' }],
+        [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+      );
+
       return send(chat, text, {
         reply_markup: {
-          inline_keyboard: [
-            [{ text: '🎯 Scan Next Match', callback_data: 'quest_special' }],
-            [{ text: '📊 My Win Rate', callback_data: 'my_stats' }],
-            [{ text: '🔙 Main Menu', callback_data: 'menu' }]
-          ]
+          inline_keyboard: buttons
         }
       });
     }

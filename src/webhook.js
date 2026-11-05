@@ -238,7 +238,7 @@ function startWebhookServer(onPaymentActivated) {
           { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures, ~10 odds accumulators' },
           { id: 'efootball', name: 'eFootball', icon: '🕹', desc: 'In-play matches with 3+ margin after 40′' },
           { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' },
-          { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live background sniper: vFootball at 38′ (HT O/U) & 80′ (Late Lead)' }
+          { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live background sniper: vFootball (41′ HT Under, 43′ H1 Result, 85′ FT Under, 88′ Late Lead/Hcap)' }
         ]
       }));
     }
@@ -431,7 +431,7 @@ function startWebhookServer(onPaymentActivated) {
             return res.end(JSON.stringify({
               success: true,
               found: false,
-              message: 'No live vFootball game currently meets the 38′ HT or 80′ Late Lead criteria.'
+              message: 'No live vFootball game currently meets the 41′ HT Under, 43′ H1 Result, 85′ FT Under, or 88′ Late Lead/Hcap criteria.'
             }));
           }
           return res.end(JSON.stringify({

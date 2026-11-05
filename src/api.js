@@ -4,25 +4,17 @@ const { sleep } = require('./util');
 
 const API = `https://www.sportybet.com/api/${CFG.REGION}`;
 
-// Full browser emulation headers (exact replica of Chrome on Windows)
+// Full mobile WAP emulation headers (matches SportyBet mobile app & WAP)
 const HDR = {
   'accept': 'application/json, text/plain, */*',
-  'accept-language': 'en-US,en;q=0.9',
-  'cache-control': 'no-cache',
-  'clientid': 'web',
-  'current-country': CFG.REGION.toUpperCase(),
-  'origin': `https://www.sportybet.com`,
-  'platform': 'web',
-  'pragma': 'no-cache',
-  'priority': 'u=1, i',
-  'referer': `https://www.sportybet.com/${CFG.REGION}/`,
-  'sec-ch-ua': '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-  'sec-ch-ua-mobile': '?0',
-  'sec-ch-ua-platform': '"Windows"',
-  'sec-fetch-dest': 'empty',
-  'sec-fetch-mode': 'cors',
-  'sec-fetch-site': 'same-origin',
-  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+  'accept-language': 'en-GB,en;q=0.9',
+  'clientid': 'wap',
+  'current-country': (CFG.REGION || 'gh').toLowerCase(),
+  'origin': 'https://www.sportybet.com',
+  'platform': 'wap',
+  'referer': `https://www.sportybet.com/${(CFG.REGION || 'gh').toLowerCase()}/m/sport/football/today/`,
+  'x-requested-with': 'XMLHttpRequest',
+  'user-agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
 };
 
 async function get(url, tries = 3) {
