@@ -731,12 +731,12 @@ async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs =
     const sc = scoreOf(rawEv);
     if (min == null || !sc) continue;
 
-    // Strictly fetch from 75' onwards (H2 75'-86') - NOT 60' and NOT H1
+    const inH1 = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.0;
     const inH2 = rawEv.matchStatus === 'H2' && min >= 75.0 && min <= 86.0;
-    if (!inH2) continue;
+    if (!inH1 && !inH2) continue;
 
     const ev = await enrichEventMarkets(rawEv);
-    const candidates = getCandidatesForEvent(ev, min, sc, false, inH2, normalizedMode);
+    const candidates = getCandidatesForEvent(ev, min, sc, inH1, inH2, normalizedMode);
     if (!candidates || !candidates.length) continue;
 
     // Pick best non-fired candidate for this event

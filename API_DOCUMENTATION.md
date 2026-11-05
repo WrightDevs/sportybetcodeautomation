@@ -474,9 +474,9 @@ Starts background scanning for the user. When games qualify, the slip (single-le
 ```
 *Parameters:*
 - `mode`:
+  - `"mix"` / `"any"`: (Recommended Default) Finds Handicap first; if unavailable/locked, falls back to safe Under lines (at 42' HT or 75'+ FT), H1 handicap, or No GG.
   - `"handicap"`: Strictly targets goal cushions (European Handicap +1/+2/+3 cushions & Double Chance +0.5).
   - `"ou"`: Strictly targets goal-line Under markets (HT Under & FT Under).
-  - `"any"`: (Default) Evaluates both Handicap and O/U, securing whichever qualifies first.
 - `legs`: (Optional, default `1`)
   - `1`: Single-leg sniper slip.
   - `5`: 5-leg live accumulator combo combining 5 distinct live match cushions in 1 SportyBet code.

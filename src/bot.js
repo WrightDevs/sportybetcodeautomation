@@ -49,18 +49,15 @@ const editMessage = (chat, messageId, text, extra = {}) =>
 
 const sportsMenu = {
   inline_keyboard: [
-    [{ text: '🎯 Quest Special (Live In-Play)', callback_data: 'quest_special' }],
+    [{ text: 'Quest Special', callback_data: 'quest_special' }],
     [
-      { text: '⚽ Football', callback_data: 'football' },
-      { text: '🕹 eFootball', callback_data: 'efootball' },
-      { text: '⚡ vFootball', callback_data: 'vfootball' }
+      { text: 'Football', callback_data: 'football' },
+      { text: 'eFootball', callback_data: 'efootball' },
+      { text: 'vFootball', callback_data: 'vfootball' }
     ],
     [
-      { text: '📊 My Stats & History', callback_data: 'my_stats' },
-      { text: '🌐 Boom Proof', callback_data: 'global_stats' }
-    ],
-    [
-      { text: 'ℹ️ VIP Status', callback_data: 'sub_status' }
+      { text: 'Stats & History', callback_data: 'my_stats' },
+      { text: 'VIP Status', callback_data: 'sub_status' }
     ]
   ]
 };
@@ -68,28 +65,27 @@ const sportsMenu = {
 function getPaywallMenu() {
   const buttons = [];
   if (CFG.QUESTPAY_API_KEY) {
-    buttons.push([{ text: `💳 Pay ₦${CFG.SUB_PRICE.toLocaleString()} Online (QuestPay)`, callback_data: 'pay_questpay_init' }]);
+    buttons.push([{ text: `Pay ₦${CFG.SUB_PRICE.toLocaleString()} Online (QuestPay)`, callback_data: 'pay_questpay_init' }]);
   } else if (CFG.QUESTPAY_LINK) {
-    buttons.push([{ text: `💳 Pay ₦${CFG.SUB_PRICE.toLocaleString()} via QuestPay`, url: CFG.QUESTPAY_LINK }]);
+    buttons.push([{ text: `Pay ₦${CFG.SUB_PRICE.toLocaleString()} via QuestPay`, url: CFG.QUESTPAY_LINK }]);
   }
-  buttons.push([{ text: '🔄 Verify QuestPay Reference', callback_data: 'verify_questpay' }]);
-  buttons.push([{ text: `🏦 Bank Transfer (₦${CFG.SUB_PRICE.toLocaleString()})`, callback_data: 'pay_transfer' }]);
-  buttons.push([{ text: 'ℹ️ Check Subscription Status', callback_data: 'sub_status' }]);
+  buttons.push([{ text: 'Verify QuestPay Reference', callback_data: 'verify_questpay' }]);
+  buttons.push([{ text: `Bank Transfer (₦${CFG.SUB_PRICE.toLocaleString()})`, callback_data: 'pay_transfer' }]);
+  buttons.push([{ text: 'Check Subscription Status', callback_data: 'sub_status' }]);
   return { inline_keyboard: buttons };
 }
 
-const HELP = `<b>Welcome to SportyBet Daily Codes VIP!</b>\n\n`
-  + `Select an option below to generate fresh booking codes:\n\n`
-  + `⚽ <b>Football</b> — real fixtures, ~10 odds accumulators\n`
-  + `🕹 <b>eFootball</b> — in-play, leader by 3+ after 40′\n`
-  + `⚡ <b>vFootball</b> — in-play & upcoming 3-min rounds\n`
-  + `🎯 <b>Quest Special</b> — live background sniper (40′ HT Handicap/Under, 75′–82′ FT Handicap, 83′ FT Under)\n\n`
-  + `<i>Booking codes are non-staking preparation slips.</i>`;
+const HELP = `<b>SportyBet Daily Codes VIP</b>\n\n`
+  + `Select an option below:\n\n`
+  + `• <b>Quest Special</b> — live in-play (Handicap with O/U fallback)\n`
+  + `• <b>Football</b> — real fixtures accumulator\n`
+  + `• <b>eFootball</b> — in-play leader\n`
+  + `• <b>vFootball</b> — live virtual matches`;
 
 function sendPaywall(chat) {
-  const text = `🔒 <b>VIP Subscription Required</b>\n\n`
+  const text = `<b>VIP Subscription Required</b>\n\n`
     + `Access to daily codes costs <b>₦${CFG.SUB_PRICE.toLocaleString()} / ${CFG.SUB_DAYS} days</b>.\n\n`
-    + `Choose your preferred payment method below:`;
+    + `Choose payment method below:`;
   return send(chat, text, { reply_markup: getPaywallMenu() });
 }
 
@@ -220,28 +216,23 @@ async function handleSport(chat, key) {
 }
 
 async function handleQuestSpecial(chat, forcedOptions = null) {
-  if (!isSubscribed(chat)) {
-    return sendPaywall(chat);
-  }
+  if (!isSubscribed(chat)) return sendPaywall(chat);
 
   const isUnlimited = isUnlimitedUser(chat);
 
   if (isQuestSpecialActive(chat)) {
     const status = getQuestSpecialStatus(chat);
-    const modeLabel = status.mode === 'handicap' ? '🛡️ Handicap Only' : status.mode === 'ou' ? '📉 Over / Under' : '⚡ Any Market';
-    const legsText = status.legs > 1 ? `${status.legs}-Leg Combo` : '1-Leg Sniper';
-    const quotaDisplay = status.isUnlimited ? 'Unlimited (Admin Access)' : `${status.dailyUsed}/${status.maxDaily}`;
+    const legsText = status.legs > 1 ? `${status.legs}-Leg Mix` : '1-Leg Mix';
+    const quotaDisplay = status.isUnlimited ? 'Unlimited (Admin)' : `${status.dailyUsed}/${status.maxDaily}`;
 
-    return send(chat, `⏳ <b>Quest Special is already actively scanning!</b>\n\n`
-      + `• <b>Format:</b> <b>${legsText}</b>\n`
-      + `• <b>Target Strategy:</b> <b>${modeLabel}</b>\n`
-      + `• <b>Current Cycle:</b> Scan #${status.scans} (${status.runningFor}s elapsed)\n`
-      + `• <b>Today's Quota Used:</b> ${quotaDisplay}\n\n`
-      + `The bot will message you the second a qualifying match is detected!`, {
+    return send(chat, `<b>Quest Special Scanning</b>\n\n`
+      + `Format: <b>${legsText}</b>\n`
+      + `Scan #${status.scans} (${status.runningFor}s elapsed)\n`
+      + `Daily: ${quotaDisplay}`, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🛑 Cancel Scan', callback_data: 'stop_quest_special' }],
-          [{ text: '🔙 Back to Menu', callback_data: 'menu' }]
+          [{ text: 'Cancel Scan', callback_data: 'stop_quest_special' }],
+          [{ text: 'Back to Menu', callback_data: 'menu' }]
         ]
       }
     });
@@ -249,8 +240,7 @@ async function handleQuestSpecial(chat, forcedOptions = null) {
 
   const dailyUsed = getQuestSpecialDailyCount(chat);
   if (!isUnlimited && dailyUsed >= QUEST_SPECIAL_MAX_DAILY) {
-    return send(chat, `⚠️ <b>Quest Special Daily Quota Reached (${QUEST_SPECIAL_MAX_DAILY}/${QUEST_SPECIAL_MAX_DAILY})</b>\n\n`
-      + `You have utilized your maximum 20 Quest Special signals for today. Your daily quota resets at midnight!`, {
+    return send(chat, `<b>Quest Special Limit Reached</b> (${QUEST_SPECIAL_MAX_DAILY}/${QUEST_SPECIAL_MAX_DAILY})\nQuota resets at midnight UTC.`, {
       reply_markup: sportsMenu
     });
   }
@@ -259,77 +249,56 @@ async function handleQuestSpecial(chat, forcedOptions = null) {
     return launchQuestSpecialSession(chat, forcedOptions);
   }
 
-  const quotaDisplay = isUnlimited ? 'Unlimited (Admin Access)' : `${dailyUsed}/${QUEST_SPECIAL_MAX_DAILY}`;
+  const quotaDisplay = isUnlimited ? 'Unlimited (Admin)' : `${dailyUsed}/${QUEST_SPECIAL_MAX_DAILY}`;
 
-  // Interactive format & market selection menu - Clean & Symmetrical
-  return send(chat, `🎯 <b>Quest Special — Choose Format & Strategy</b>\n\n`
-    + `Select your slip format and target market below:\n\n`
-    + `• <b>1-Leg Snipers:</b> High-probability single match lock\n`
-    + `• <b>5-Leg Combos:</b> 5-match accumulator multiplier\n\n`
-    + `<i>📊 Today's Quota: ${quotaDisplay}</i>`, {
+  // Mixed format menu - Clean & concise
+  return send(chat, `<b>Quest Special</b>\nSelect an option below:\n<i>Quota: ${quotaDisplay}</i>`, {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '🛡️ 1-Leg Hcap', callback_data: 'qs_1_handicap' },
-          { text: '📉 1-Leg O/U', callback_data: 'qs_1_ou' },
-          { text: '⚡ 1-Leg Any', callback_data: 'qs_1_any' }
+          { text: '1-Leg Mix', callback_data: 'qs_1_any' },
+          { text: '5-Leg Mix', callback_data: 'qs_5_any' }
         ],
         [
-          { text: '🛡️ 5-Leg Hcap', callback_data: 'qs_5_handicap' },
-          { text: '📉 5-Leg O/U', callback_data: 'qs_5_ou' },
-          { text: '🔥 5-Leg Combo', callback_data: 'qs_5_any' }
-        ],
-        [
-          { text: '🔙 Back to Menu', callback_data: 'menu' }
+          { text: 'Back to Menu', callback_data: 'menu' }
         ]
       ]
     }
   });
 }
 
-async function launchQuestSpecialSession(chat, options = { mode: 'any', legs: 1 }) {
+async function launchQuestSpecialSession(chat, options = { mode: 'mix', legs: 1 }) {
   if (!isSubscribed(chat)) return sendPaywall(chat);
 
   const isUnlimited = isUnlimitedUser(chat);
   const dailyUsed = getQuestSpecialDailyCount(chat);
 
   if (!isUnlimited && dailyUsed >= QUEST_SPECIAL_MAX_DAILY) {
-    return send(chat, `⚠️ <b>Quest Special Daily Quota Reached (${QUEST_SPECIAL_MAX_DAILY}/${QUEST_SPECIAL_MAX_DAILY})</b>\n\nYour quota resets at midnight!`, { reply_markup: sportsMenu });
+    return send(chat, `<b>Quest Special Limit Reached</b> (${QUEST_SPECIAL_MAX_DAILY}/${QUEST_SPECIAL_MAX_DAILY})`, { reply_markup: sportsMenu });
   }
 
-  const mode = (typeof options === 'string' ? options : options.mode || 'any').toLowerCase().trim();
+  const mode = (typeof options === 'string' ? options : options.mode || 'mix').toLowerCase().trim();
   const legs = (typeof options === 'object' && options.legs) ? Number(options.legs) : 1;
+  const formatLabel = legs > 1 ? `${legs}-Leg Mix` : '1-Leg Mix';
+  const quotaDisplay = isUnlimited ? 'Unlimited (Admin)' : `${dailyUsed + 1}/${QUEST_SPECIAL_MAX_DAILY}`;
 
-  const modeLabel = mode === 'handicap' ? '🛡️ Handicap' : mode === 'ou' ? '📉 Over / Under' : '⚡ Mixed/Any';
-  const formatLabel = legs > 1 ? `${legs}-Leg Accumulator` : 'Single-Leg Sniper';
-  const quotaDisplay = isUnlimited ? 'Unlimited (Admin Access)' : `${dailyUsed + 1}/${QUEST_SPECIAL_MAX_DAILY}`;
-
-  await send(chat, `🎯 <b>Quest Special Activated!</b>\n\n`
-    + `🎯 <b>Strategy:</b> <b>${modeLabel}</b>\n`
-    + `🎫 <b>Format:</b> <b>${formatLabel}</b>\n`
-    + `📡 <b>Live Scanner:</b> Running in background across all live leagues\n`
-    + `📊 <b>Today's Quota:</b> ${quotaDisplay}\n\n`
-    + `<i>Stand by… You will receive an instant notification here the moment qualifying ${legs > 1 ? `${legs} matches appear` : 'match appears'}!</i>`, {
+  await send(chat, `<b>Quest Special (${formatLabel}) Activated</b>\nScanning live matches (Handicap with O/U fallback)…\n<i>Quota: ${quotaDisplay}</i>`, {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '🛑 Cancel Scan', callback_data: 'stop_quest_special' }],
-        [{ text: '⚙️ Change Strategy', callback_data: 'quest_special' }],
-        [{ text: '🔙 Menu', callback_data: 'menu' }]
+        [{ text: 'Cancel Scan', callback_data: 'stop_quest_special' }],
+        [{ text: 'Back to Menu', callback_data: 'menu' }]
       ]
     }
   });
 
   startQuestSpecial(chat, { mode, legs }, async (result, timedOut) => {
     if (timedOut) {
-      const retryCallback = legs > 1 ? `qs_${legs}_${mode}` : `qs_1_${mode}`;
-      return send(chat, `⏳ <b>Quest Special: Cycle Concluded</b>\n\n`
-        + `No live vFootball game reached qualifying criteria for <b>${formatLabel} (${modeLabel})</b> during this scan window.\n\n`
-        + `Tap below to scan the next upcoming round:`, {
+      const retryCallback = legs > 1 ? 'qs_5_any' : 'qs_1_any';
+      return send(chat, `<b>Quest Special (${formatLabel})</b>\nNo match met criteria during this round.`, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: `🎯 Scan Next (${formatLabel})`, callback_data: retryCallback }],
-            [{ text: '⚙️ Change Strategy', callback_data: 'quest_special' }],
-            [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+            [{ text: 'Scan Next', callback_data: retryCallback }],
+            [{ text: 'Main Menu', callback_data: 'menu' }]
           ]
         }
       });
@@ -337,80 +306,65 @@ async function launchQuestSpecialSession(chat, options = { mode: 'any', legs: 1 
 
     if (result) {
       if (result.isMultiLeg && Array.isArray(result.legs)) {
-        // Multi-leg accumulator signal
-        let text = `🎯 <b>QUEST SPECIAL ${result.legsCount}-LEG ACCUMULATOR FOUND!</b> ⚡️\n\n`
-          + `🎫 <b>Total Combined Odds:</b> <b>@${result.totalOdds}</b>\n`
-          + `🏆 <b>Format:</b> ${result.legsCount}-Leg Combo (${modeLabel})\n\n`;
+        let text = `<b>Quest Special (${result.legsCount}-Leg Mix)</b>\n\n`
+          + `<b>Total Odds:</b> @${result.totalOdds}\n\n`;
 
         result.legs.forEach((l, idx) => {
-          text += `<b>Leg ${idx + 1}:</b> ⚽ <b>${l.home} vs ${l.away}</b> (${l.minute}′)\n`
-            + `• Score: ${l.homeScore}-${l.awayScore} | ${l.league || 'vFootball'}\n`
-            + `• Pick: <b>${l.description}</b> (@${l.odds})\n`
-            + `• <i>${l.reasoning}</i>\n\n`;
+          text += `<b>Leg ${idx + 1}:</b> ${l.home} vs ${l.away} (${l.minute}′)\n`
+            + `• Score: ${l.homeScore}-${l.awayScore}\n`
+            + `• Pick: <b>${l.description}</b> (@${l.odds})\n\n`;
         });
 
         if (result.code) {
-          text += `🎫 <b>SportyBet Booking Code:</b>\n`
+          text += `<b>SportyBet Booking Code:</b>\n`
             + `<code>${result.code}</code>\n`
-            + `🔗 ${result.url}\n\n`
-            + `<i>${result.legsCount}-leg slip generated and tracked in your Boom analytics!</i>`;
+            + `🔗 ${result.url}`;
         } else {
-          text += `⚠️ <i>Booking code generation was busy. You can place the selections directly using the match details above!</i>`;
+          text += `Booking code was busy. Place directly using the match details above.`;
         }
 
         const buttons = [];
         if (result.url) {
-          buttons.push([{ text: `⚡ Load ${result.legsCount}-Leg Slip (${result.code || 'SportyBet'})`, url: result.url }]);
+          buttons.push([{ text: `Open ${result.code || 'Slip'} in SportyBet`, url: result.url }]);
         }
-        const scanNextCb = `qs_${result.legsCount}_${mode}`;
         buttons.push(
-          [{ text: `🎯 Scan Next (${result.legsCount}-Leg ${modeLabel})`, callback_data: scanNextCb }],
-          [{ text: '⚙️ Change Strategy / Format', callback_data: 'quest_special' }],
-          [{ text: '📊 My Win Rate', callback_data: 'my_stats' }],
-          [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+          [{ text: 'Scan Next', callback_data: 'qs_5_any' }],
+          [{ text: 'Stats & History', callback_data: 'my_stats' }],
+          [{ text: 'Main Menu', callback_data: 'menu' }]
         );
 
         return send(chat, text, {
-          reply_markup: {
-            inline_keyboard: buttons
-          }
+          reply_markup: { inline_keyboard: buttons }
         });
       }
 
       // Single-leg sniper signal
-      let text = `🎯 <b>QUEST SPECIAL SIGNAL FOUND!</b> ⚡️\n\n`
-        + `⚽ <b>Match:</b> <b>${result.home}</b> vs <b>${result.away}</b>\n`
-        + `⏱ <b>Minute:</b> ${result.minute}′\n`
-        + `🔢 <b>Score:</b> ${result.homeScore} - ${result.awayScore}\n`
-        + `🏆 <b>League:</b> ${result.league || 'vFootball'}\n\n`
-        + `📌 <b>Pick:</b> <b>${result.analysis.description}</b>\n`
-        + `📈 <b>Odds:</b> <b>@${result.analysis.odds}</b>\n`
-        + `💡 <b>Reasoning:</b> <i>${result.analysis.reasoning}</i>\n\n`;
+      let text = `<b>Quest Special (1-Leg Mix)</b>\n\n`
+        + `<b>Match:</b> ${result.home} vs ${result.away} (${result.minute}′)\n`
+        + `<b>Score:</b> ${result.homeScore} - ${result.awayScore}\n`
+        + `<b>Pick:</b> <b>${result.analysis.description}</b>\n`
+        + `<b>Odds:</b> @${result.analysis.odds}\n\n`;
 
       if (result.code) {
-        text += `🎫 <b>SportyBet Booking Code:</b>\n`
+        text += `<b>SportyBet Booking Code:</b>\n`
           + `<code>${result.code}</code>\n`
-          + `🔗 ${result.url}\n\n`
-          + `<i>Single-leg slip generated and tracked in your Boom analytics!</i>`;
+          + `🔗 ${result.url}`;
       } else {
-        text += `⚠️ <i>Booking code generation was busy. You can place the bet directly using the match details above!</i>`;
+        text += `Booking code was busy. Place directly using the match details above.`;
       }
 
       const buttons = [];
       if (result.url) {
-        buttons.push([{ text: `⚡ Open ${result.code || 'Slip'} in SportyBet`, url: result.url }]);
+        buttons.push([{ text: `Open ${result.code || 'Slip'} in SportyBet`, url: result.url }]);
       }
       buttons.push(
-        [{ text: `🎯 Scan Next (${modeLabel})`, callback_data: `qs_1_${mode}` }],
-        [{ text: '⚙️ Change Strategy / Format', callback_data: 'quest_special' }],
-        [{ text: '📊 My Win Rate', callback_data: 'my_stats' }],
-        [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+        [{ text: 'Scan Next', callback_data: 'qs_1_any' }],
+        [{ text: 'Stats & History', callback_data: 'my_stats' }],
+        [{ text: 'Main Menu', callback_data: 'menu' }]
       );
 
       return send(chat, text, {
-        reply_markup: {
-          inline_keyboard: buttons
-        }
+        reply_markup: { inline_keyboard: buttons }
       });
     }
   });
@@ -419,9 +373,9 @@ async function launchQuestSpecialSession(chat, options = { mode: 'any', legs: 1 
 function handleStopQuestSpecial(chat) {
   const stopped = stopQuestSpecial(chat);
   if (stopped) {
-    return send(chat, '🛑 <b>Quest Special scan cancelled.</b>', { reply_markup: sportsMenu });
+    return send(chat, '<b>Quest Special scan cancelled.</b>', { reply_markup: sportsMenu });
   }
-  return send(chat, 'ℹ️ No active Quest Special scan was running.', { reply_markup: sportsMenu });
+  return send(chat, 'No active Quest Special scan running.', { reply_markup: sportsMenu });
 }
 
 async function handleUserStats(chat) {
