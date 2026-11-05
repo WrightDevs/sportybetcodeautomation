@@ -302,28 +302,37 @@ Imminent whistle       Leader or 1st Half                  Imminent FT whistle  
 into half-time break.  favourite lock.                     into full time.       • Virtual ➔ Fav / Cushion
 ```
 
-#### Rule 1: 41 Minutes to Half Time → Under 0.5 HT (39.5′ – 42.5′)
-- **Clock Window:** ~41 virtual minutes (~79s - 85s into the 3-minute round).
-- **Market Targeted:** Market `68` (1st Half - Over/Under) with `specifier: "total=0.5"`, Outcome: `Under 0.5`.
-- **Reasoning:** In virtual football, closing seconds of the 1st half have virtually no goal conversion. Under 0.5 HT has an overwhelmingly safe completion rate right before the halftime break.
+#### Rule 1: 41 Minutes to Half Time → Dynamic Under Line (38.0′ – 42.5′)
+- **Clock Window:** ~41 virtual minutes (~76s - 85s into the 3-minute round).
+- **Target Line:** `Under (Current Goals + 0.5)` in Market `68` (`1st Half - Over/Under`):
+  - Score is `0-0` (0 goals) ➔ **Under 0.5 HT**
+  - Score is `1-0` or `0-1` (1 goal) ➔ **Under 1.5 HT**
+  - Score is `1-1` or `2-0` (2 goals) ➔ **Under 2.5 HT**
+- **Reasoning:** In virtual football, closing seconds of the 1st half have virtually no goal conversion. Under `(goals + 0.5)` has an overwhelmingly safe completion rate right before the halftime break.
 
-#### Rule 2: 43 Minutes → Winner of H1 (42.5′ – 45.0′)
-- **Clock Window:** ~43 virtual minutes (~85s - 90s into the 3-minute round).
-- **Market Targeted:** Market `60` (1st Half - 1X2).
-- **Selection:** If a team is leading, selects the leader. If tied or virtual feed has no score broadcast, selects the algorithmic 1st Half favorite (`odds <= 2.50`).
+#### Rule 2: 43 Minutes → 1st Half Winner or 1st Half Draw (42.0′ – 45.5′)
+- **Clock Window:** ~43 virtual minutes (~84s - 91s into the 3-minute round).
+- **Market Targeted:** Market `60` (`1st Half - 1X2`).
+- **Selection:**
+  - **Tied game (e.g. `0-0`, `1-1`):** Selects **1st Half Draw (X)**. Whistle is imminent and game will reach the break level.
+  - **Team leading (e.g. `1-0`, `0-1`):** Selects **1st Half Winner** on the leading team.
 - **Reasoning:** Locks in the 1st Half result right before the referee sounds the halftime whistle.
 
-#### Rule 3: 85 Minutes to Full Time → FT Under 0.5 (84.0′ – 86.8′)
-- **Clock Window:** ~85 virtual minutes (~168s - 173s into the 3-minute round).
-- **Market Targeted:** Market `18` (Full Time Over/Under).
-- **Selection:** If score is 0-0 or silent, selects `total=0.5 Under` (or lowest Under line <= 2.5). If score has `G` goals, selects `total = G + 0.5 Under`.
-- **Reasoning:** With under 10 seconds of real simulation remaining, scoring additional goals is statistically suppressed, guaranteeing a high-probability Under exit.
+#### Rule 3: 85 Minutes to Full Time → Dynamic FT Under (82.0′ – 87.0′)
+- **Clock Window:** ~85 virtual minutes (~164s - 174s into the 3-minute round).
+- **Target Line:** `Under (Current Goals + 0.5)` in Market `18` (`Full Time Over/Under`):
+  - Score is `0-0` ➔ **Under 0.5 FT**
+  - Score is `1-0` or `0-1` ➔ **Under 1.5 FT**
+  - Score is `1-1` or `2-0` ➔ **Under 2.5 FT**
+  - Score is `2-1` or `3-0` ➔ **Under 3.5 FT**
+- **Reasoning:** With under 15 seconds of real simulation remaining, scoring additional goals is statistically suppressed, guaranteeing a high-probability Under exit.
 
-#### Rule 4: 88 Minutes to Full Time → Handicap & 1X2 Winner (87.0′ – 89.8′)
-- **Clock Window:** ~88 virtual minutes (~174s - 179s into the 3-minute round).
+#### Rule 4: 88 Minutes to Full Time → FT Draw, 1X2 Winner, or Handicap (86.5′ – 90.0′)
+- **Clock Window:** ~88 virtual minutes (~173s - 180s into the 3-minute round).
 - **Lead-Based Logic:**
+  - **Tied game (e.g. `0-0`, `1-1`, `2-2`):** Selects **Full Time Draw (X)** in Market `1`.
   - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team. A 2-goal deficit cannot be overturned in 5 virtual seconds.
-  - **1-Goal Lead (e.g. `1-0`, `0-1`):** Selects **Handicap (Market `14`)** giving a 1.5 to 2.0 cushion (`hcp=2:0` or `hcp=0:2`) or 1X2 Match Winner on the leader.
+  - **1-Goal Lead (e.g. `1-0`, `0-1`, `2-1`):** Selects **Handicap (Market `14`)** giving a +1.5 to +2.0 cushion (`hcp=2:0` or `hcp=0:2`) or 1X2 Match Winner on the leader.
   - **Virtual Match (Silent Score):** Selects **1X2 Match Winner** on strong favorite or **Handicap with 2-goal cushion**.
 
 ---

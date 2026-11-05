@@ -124,29 +124,39 @@ function findOutcome(ev, marketId, pred) {
 // ── Exact Quest Special Timing Rules ───────────────────
 
 /**
- * Rule 1: 41-minute window to Half Time → Under 0.5 HT
+ * Rule 1: 41-minute window to Half Time → Dynamic Under line
  * Trigger: ~41' (Window: 38.0' – 42.5', ~76s - 85s into 3-min round)
- * Imminent half-time whistle with 0 first-half goals.
+ * Target: Under (currentGoals + 0.5)
+ *  • 0-0  → Under 0.5 HT
+ *  • 1-0  → Under 1.5 HT
+ *  • 1-1+ → Under 2.5 HT
  */
 function analyze41_HTUnder(ev, minute, h, a) {
   if (minute < 38.0 || minute > 42.5) return null;
 
-  // Market 68: 1st Half - Over/Under with total=0.5, Outcome Under
+  const currentGoals = (h || 0) + (a || 0);
+  const targetLine = currentGoals + 0.5;
+
+  // Market 68: 1st Half - Over/Under with total = targetLine, Outcome Under
   const pick = findOutcome(ev, '68', (o, m) => {
     const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
-    return total <= 0.5 && String(o.desc || '').startsWith('Under');
-  }) || findOutcome(ev, '18', (o, m) => {
-    // Fallback to market 18 if market 68 not returned
+    return Math.abs(total - targetLine) < 0.1 && String(o.desc || '').startsWith('Under');
+  }) || findOutcome(ev, '68', (o, m) => {
+    // Closest line >= targetLine
     const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
-    return total <= 0.5 && String(o.desc || '').startsWith('Under');
+    return total >= targetLine && total <= targetLine + 1.0 && String(o.desc || '').startsWith('Under');
+  }) || findOutcome(ev, '18', (o, m) => {
+    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
+    return total <= targetLine && String(o.desc || '').startsWith('Under');
   });
 
   if (pick) {
+    const line = (/total=([\d.]+)/.exec(pick.market.specifier || '') || [])[1] || String(targetLine);
     return {
       window: '41min_ht_under',
-      type: 'ht_under_05',
-      description: `1st Half Under 0.5 (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
-      reasoning: `Live virtual match at ${Math.round(minute)}' (approaching HT). Imminent whistle — High-probability 1st Half Under 0.5.`,
+      type: 'ht_under',
+      description: `1st Half Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
+      reasoning: `Score is ${h}-${a} at ${Math.round(minute)}'. Half-time whistle is imminent — 1st Half Under ${line}.`,
       ...pick
     };
   }
@@ -154,36 +164,40 @@ function analyze41_HTUnder(ev, minute, h, a) {
 }
 
 /**
- * Rule 2: 43-minute window → Winner of H1 (1st Half 1X2)
+ * Rule 2: 43-minute window → Winner of H1 or 1st Half Draw
  * Trigger: ~43' (Window: 42.0' – 45.5', ~84s - 91s into 3-min round)
- * Lock in the 1st Half winner right before the break.
+ *  • If tied (0-0, 1-1) → 1st Half Draw (X)
+ *  • If team leads      → 1st Half Winner on leading team
  */
 function analyze43_H1Winner(ev, minute, h, a) {
   if (minute < 42.0 || minute > 45.5) return null;
 
-  const margin = h - a;
+  const margin = (h || 0) - (a || 0);
+  const isTied = margin === 0;
   const homeLeads = margin > 0;
   const awayLeads = margin < 0;
 
   // Market 60: 1st Half - 1X2
   const pick = findOutcome(ev, '60', (o) => {
     const d = String(o.desc || '');
-    if (homeLeads) return d === 'Home' || d === '1';
-    if (awayLeads) return d === 'Away' || d === '2';
-    // If score even/unavailable, pick favorite outcome in Market 60 with solid odds
+    if (isTied) return d === 'Draw' || d === 'X' || String(o.id) === '2';
+    if (homeLeads) return d === 'Home' || d === '1' || String(o.id) === '1';
+    if (awayLeads) return d === 'Away' || d === '2' || String(o.id) === '3';
+    return false;
+  }) || findOutcome(ev, '60', (o) => {
     const odd = parseFloat(o.odds);
-    return (d === 'Home' || d === 'Away' || d === '1' || d === '2') && odd <= 2.50;
-  }) || findOutcome(ev, '1', (o) => {
-    const odd = parseFloat(o.odds);
-    return odd <= 1.80;
+    return odd <= 2.20;
   });
 
   if (pick) {
+    const pickName = isTied ? '1st Half Draw' : `1st Half Winner: ${pick.outcome.desc}`;
     return {
       window: '43min_h1_winner',
-      type: 'h1_winner',
-      description: `1st Half Winner: ${pick.outcome.desc} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
-      reasoning: `Live virtual match at ${Math.round(minute)}' (closing 1st Half). Strong 1st Half Winner lock.`,
+      type: isTied ? 'h1_draw' : 'h1_winner',
+      description: `${pickName} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
+      reasoning: isTied
+        ? `Match is tied ${h}-${a} at ${Math.round(minute)}'. Whistle is imminent — 1st Half Draw (X).`
+        : `${homeLeads ? 'Home' : 'Away'} leads ${h}-${a} at ${Math.round(minute)}'. Closing 1st Half lock.`,
       ...pick
     };
   }
@@ -191,33 +205,39 @@ function analyze43_H1Winner(ev, minute, h, a) {
 }
 
 /**
- * Rule 3: 85-minute window to Full Time → FT Under 0.5 (or lowest Under line)
+ * Rule 3: 85-minute window to Full Time → Dynamic FT Under
  * Trigger: ~85' (Window: 82.0' – 87.0', ~164s - 174s into 3-min round)
- * Safe Under line into the final whistle.
+ * Target: Under (currentGoals + 0.5)
+ *  • 0-0  → Under 0.5 FT
+ *  • 1-0  → Under 1.5 FT
+ *  • 1-1  → Under 2.5 FT
+ *  • 2-1+ → Under 3.5 FT
  */
 function analyze85_FTUnder(ev, minute, h, a) {
   if (minute < 82.0 || minute > 87.0) return null;
 
-  const totalGoals = (h || 0) + (a || 0);
-  const targetLine = totalGoals > 0 ? (totalGoals + 0.5) : 0.5;
+  const currentGoals = (h || 0) + (a || 0);
+  const targetLine = currentGoals + 0.5;
 
-  // Market 18: Full Time Over/Under closest to current line
+  // Market 18: Full Time Over/Under closest to targetLine
   const pick = findOutcome(ev, '18', (o, m) => {
     const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
-    return total <= targetLine && String(o.desc || '').startsWith('Under');
+    return Math.abs(total - targetLine) < 0.1 && String(o.desc || '').startsWith('Under');
   }) || findOutcome(ev, '18', (o, m) => {
-    // Fallback: any low Under line (<= 2.5)
+    const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
+    return total >= targetLine && total <= targetLine + 1.0 && String(o.desc || '').startsWith('Under');
+  }) || findOutcome(ev, '18', (o, m) => {
     const total = parseFloat((/total=([\d.]+)/.exec(m.specifier || '') || [])[1] || 0);
     return total <= 2.5 && String(o.desc || '').startsWith('Under');
   });
 
   if (pick) {
-    const lineStr = (/total=([\d.]+)/.exec(pick.market.specifier || '') || [])[1] || '0.5';
+    const line = (/total=([\d.]+)/.exec(pick.market.specifier || '') || [])[1] || String(targetLine);
     return {
       window: '85min_ft_under',
       type: 'ft_under',
-      description: `Full Time Under ${lineStr} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
-      reasoning: `Live virtual match at ${Math.round(minute)}' (late game). Imminent Full Time whistle — Safe Under line.`,
+      description: `Full Time Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(minute)}')`,
+      reasoning: `Score is ${h}-${a} at ${Math.round(minute)}'. Imminent Full Time whistle — Safe Under ${line}.`,
       ...pick
     };
   }
@@ -225,25 +245,43 @@ function analyze85_FTUnder(ev, minute, h, a) {
 }
 
 /**
- * Rule 4: 88-minute window to Full Time → Handicap & 1X2 Winner based on 2-goal lead or 1-goal lead
+ * Rule 4: 88-minute window to Full Time → FT Draw, 1X2 Winner, or Handicap
  * Trigger: ~88' (Window: 86.5' – 90.0', ~173s - 180s into 3-min round)
- * • 2+ goal lead: 1X2 Match Winner on leading team
- * • 1-goal lead: Handicap with +1.5 / +2 cushion or 1X2 Match Winner
- * • Virtual fallback: 1X2 on strong favorite or Handicap 2-goal cushion
+ *  • Tied (0-0, 1-1, etc.) → Full Time Draw (X) in Market 1
+ *  • 2+ goal lead          → 1X2 Match Winner on leading team in Market 1
+ *  • 1-goal lead           → Handicap (+1.5 / +2.0 cushion) or 1X2 on leader
  */
 function analyze88_LateLead(ev, minute, h, a) {
   if (minute < 86.5 || minute > 90.0) return null;
 
-  const margin = Math.abs(h - a);
-  const homeLeads = h > a;
-  const awayLeads = a > h;
+  const margin = Math.abs((h || 0) - (a || 0));
+  const isTied = margin === 0;
+  const homeLeads = (h || 0) > (a || 0);
+  const awayLeads = (a || 0) > (h || 0);
   const leaderTag = homeLeads ? 'Home' : 'Away';
 
-  // ── 2+ goal lead: 1X2 Match Winner ──────────────────────
+  // ── Case 1: Tied game at 87'-88' → Full Time Draw (X) ──
+  if (isTied) {
+    const pickDraw = findOutcome(ev, '1', (o) => {
+      const d = String(o.desc || '');
+      return d === 'Draw' || d === 'X' || String(o.id) === '2';
+    });
+    if (pickDraw) {
+      return {
+        window: '88min_draw',
+        type: 'match_draw',
+        description: `Full Time Draw (X) (${h}-${a} at ${Math.round(minute)}')`,
+        reasoning: `Match is tied ${h}-${a} at ${Math.round(minute)}'. Full time whistle is imminent — Full Time Draw (X).`,
+        ...pickDraw
+      };
+    }
+  }
+
+  // ── Case 2: 2+ goal lead: 1X2 Match Winner ──────────────────────
   if (margin >= 2) {
     const pick1x2 = findOutcome(ev, '1', (o) => {
       const d = String(o.desc || '');
-      return homeLeads ? (d === 'Home' || d === '1') : (d === 'Away' || d === '2');
+      return homeLeads ? (d === 'Home' || d === '1' || String(o.id) === '1') : (d === 'Away' || d === '2' || String(o.id) === '3');
     });
     if (pick1x2) {
       return {
@@ -256,7 +294,7 @@ function analyze88_LateLead(ev, minute, h, a) {
     }
   }
 
-  // ── 1-goal lead: Handicap cushion or 1X2 Winner ─────────
+  // ── Case 3: 1-goal lead: Handicap cushion or 1X2 Winner ─────────
   if (margin === 1) {
     const pickHcap = findOutcome(ev, '14', (o, m) => {
       const spec = String(m.specifier || '');
@@ -282,7 +320,7 @@ function analyze88_LateLead(ev, minute, h, a) {
     // Fallback: 1X2 Match Winner on leader
     const pickLeader = findOutcome(ev, '1', (o) => {
       const d = String(o.desc || '');
-      return homeLeads ? (d === 'Home' || d === '1') : (d === 'Away' || d === '2');
+      return homeLeads ? (d === 'Home' || d === '1' || String(o.id) === '1') : (d === 'Away' || d === '2' || String(o.id) === '3');
     });
     if (pickLeader) {
       return {
@@ -295,13 +333,13 @@ function analyze88_LateLead(ev, minute, h, a) {
     }
   }
 
-  // ── Virtual Match (Score feed silent): Strong Favorite or Handicap Cushion ──
-  const pickLate = findOutcome(ev, '14', (o, m) => {
+  // ── Case 4: Virtual Match (Score feed silent): Strong Favorite or Handicap Cushion ──
+  const pickLate = findOutcome(ev, '1', (o) => {
+    const odd = parseFloat(o.odds);
+    return odd >= 1.10 && odd <= 1.85;
+  }) || findOutcome(ev, '14', (o, m) => {
     const spec = String(m.specifier || '');
     return (spec.includes('hcp=2:0') || spec.includes('hcp=0:2')) && parseFloat(o.odds) <= 1.35;
-  }) || findOutcome(ev, '1', (o) => {
-    const odd = parseFloat(o.odds);
-    return odd >= 1.10 && odd <= 1.75;
   });
 
   if (pickLate) {
