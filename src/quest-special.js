@@ -6,7 +6,7 @@ const { recordSlip } = require('./tracker');
 // ── Configuration & Headers ────────────────────────────
 const CC = (CFG.REGION || 'gh').toLowerCase();
 const SPORT = 'sr:sport:202120001';
-const MARKETS = '1,14,18,60,68';
+const MARKETS = '1,14,18,60,65,68';
 
 const MIN_ODDS = Number(process.env.QUEST_MIN_ODDS || 1.01);
 const MAX_ODDS = Number(process.env.QUEST_MAX_ODDS || 1.35);
@@ -84,11 +84,109 @@ function getOutcome(m, outcomeId) {
   return (!isNaN(odds) && odds >= 1.01) ? { outcome: o, odds } : null;
 }
 
-// ── Timing Rule 1: 41′ HT Under (Window: 38′ – 42.5′, must be H1) ──
-function checkHTUnder(ev, min, sc) {
+// ── Enrich Event Markets ────────────────────────────────
+// If event only has basic markets from the main list, fetch full details for handicap & OU lines
+async function enrichEventMarkets(ev) {
+  const hasHcap = (ev.markets || []).some(m => m.id === '14' || m.id === '65');
+  if (hasHcap) return ev;
+  try {
+    const url = `https://www.sportybet.com/api/${CC}/factsCenter/event?eventId=${encodeURIComponent(ev.eventId)}`;
+    const res = await fetch(url, { headers: BASE_HEADERS });
+    const j = await res.json();
+    if (j.bizCode === 10000 && j.data && Array.isArray(j.data.markets)) {
+      return { ...ev, markets: j.data.markets };
+    }
+  } catch (_) {}
+  return ev;
+}
+
+// ── Handicap Evaluator (Top Priority) ───────────────────
+function checkHandicap(ev, min, sc, isHT) {
+  const marketIds = isHT ? ['65', '14'] : ['14'];
+
+  for (const mId of marketIds) {
+    const mList = getMarkets(ev, mId);
+    const validPicks = [];
+
+    for (const m of mList) {
+      const spec = String(m.specifier || '');
+      const matchSpec = /^hcp=(\d+):(\d+)$/.exec(spec);
+      if (!matchSpec) continue;
+      const x = Number(matchSpec[1]);
+      const y = Number(matchSpec[2]);
+
+      const hAfter = sc.h + x;
+      const aAfter = sc.a + y;
+      const hMargin = hAfter - aAfter;
+      const aMargin = aAfter - hAfter;
+
+      // Home Handicap (Outcome 1711) - qualifies if adjusted Home has >= 1 goal cushion
+      if (hMargin >= 1) {
+        const match = getOutcome(m, '1711');
+        if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+          validPicks.push({
+            window: isHT ? '41min_ht_hcap' : '85min_ft_hcap',
+            type: isHT ? 'ht_handicap' : 'ft_handicap',
+            marketId: mId,
+            specifier: m.specifier,
+            outcomeId: '1711',
+            odds: match.odds,
+            cushion: hMargin,
+            description: `${ev.homeTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+            reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} holds a +${hMargin} cushion on handicap [${m.specifier}].`,
+            market: m,
+            outcome: match.outcome
+          });
+        }
+      }
+
+      // Away Handicap (Outcome 1713) - qualifies if adjusted Away has >= 1 goal cushion
+      if (aMargin >= 1) {
+        const match = getOutcome(m, '1713');
+        if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
+          validPicks.push({
+            window: isHT ? '41min_ht_hcap' : '85min_ft_hcap',
+            type: isHT ? 'ht_handicap' : 'ft_handicap',
+            marketId: mId,
+            specifier: m.specifier,
+            outcomeId: '1713',
+            odds: match.odds,
+            cushion: aMargin,
+            description: `${ev.awayTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
+            reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} holds a +${aMargin} cushion on handicap [${m.specifier}].`,
+            market: m,
+            outcome: match.outcome
+          });
+        }
+      }
+    }
+
+    if (validPicks.length > 0) {
+      // Prioritize greatest cushion (+2/+3 before +1), then lowest safe odds
+      validPicks.sort((a, b) => b.cushion - a.cushion || a.odds - b.odds);
+      return validPicks[0];
+    }
+  }
+
+  return null;
+}
+
+// ── Timing Rule 1: 41′ HT (Window: 38′ – 42.5′, must be H1) ──
+// Priority 1: Handicap (Market 65 / Market 14)
+// Priority 2: Over/Under Fallback (Market 68 / Market 18)
+function checkHT(ev, min, sc) {
   // Guard: must be in active first half with safe buffer before half-time whistle
   if (ev.matchStatus !== 'H1' || min < 38.0 || min > 42.5) return null;
 
+  // 1st Priority: Handicap
+  const hcap = checkHandicap(ev, min, sc, true);
+  if (hcap) return hcap;
+
+  // 2nd Priority (Fallback): Over/Under
+  return checkHTUnderFallback(ev, min, sc);
+}
+
+function checkHTUnderFallback(ev, min, sc) {
   const total = sc.h + sc.a;
   const targetLine = total + 0.5;
 
@@ -109,7 +207,7 @@ function checkHTUnder(ev, min, sc) {
           outcomeId: '13',
           odds: match.odds,
           description: `1st Half Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Half-time whistle is imminent — 1st Half Under ${line}.`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Handicap unavailable — 1st Half Under ${line} fallback.`,
           market: m,
           outcome: match.outcome
         };
@@ -124,7 +222,7 @@ function checkHTUnder(ev, min, sc) {
       return v ? { line: Number(v[1]), m } : null;
     })
     .filter(x => x && x.line >= targetLine)
-    .sort((a, b) => a.line - b.line); // start at total + 0.5, step up if odds out of band
+    .sort((a, b) => a.line - b.line);
 
   for (const { line, m } of m18Lines) {
     const match = getOutcome(m, '13');
@@ -137,7 +235,7 @@ function checkHTUnder(ev, min, sc) {
         outcomeId: '13',
         odds: match.odds,
         description: `FT Under ${line} Cushion (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. High-cushion Under ${line} locked.`,
+        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Handicap unavailable — Under ${line} fallback.`,
         market: m,
         outcome: match.outcome
       };
@@ -202,11 +300,22 @@ function checkHTResult(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 3: 85′ FT Under (Window: 81′ – 85.5′, must be H2) ──
-function checkFTUnder(ev, min, sc) {
+// ── Timing Rule 3: 85′ FT (Window: 81′ – 85.5′, must be H2) ──
+// Priority 1: Handicap (Market 14)
+// Priority 2: Over/Under Fallback (Market 18)
+function checkFT(ev, min, sc) {
   // Guard: must be in active second half with safe buffer before full-time whistle
   if (ev.matchStatus !== 'H2' || min < 81.0 || min > 85.5) return null;
 
+  // 1st Priority: Handicap
+  const hcap = checkHandicap(ev, min, sc, false);
+  if (hcap) return hcap;
+
+  // 2nd Priority (Fallback): Over/Under
+  return checkFTUnderFallback(ev, min, sc);
+}
+
+function checkFTUnderFallback(ev, min, sc) {
   const total = sc.h + sc.a;
   const targetLine = total + 0.5;
 
@@ -216,7 +325,7 @@ function checkFTUnder(ev, min, sc) {
       return v ? { line: Number(v[1]), m } : null;
     })
     .filter(x => x && x.line >= targetLine)
-    .sort((a, b) => a.line - b.line); // start at total + 0.5 (e.g. 0-0 -> 0.5, 1-0 -> 1.5, 1-1 -> 2.5)
+    .sort((a, b) => a.line - b.line);
 
   for (const { line, m } of m18Lines) {
     const match = getOutcome(m, '13'); // Outcome 13 = Under
@@ -229,7 +338,7 @@ function checkFTUnder(ev, min, sc) {
         outcomeId: '13',
         odds: match.odds,
         description: `Full Time Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Full time whistle is imminent — Under ${line}.`,
+        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Handicap unavailable — Under ${line} fallback.`,
         market: m,
         outcome: match.outcome
       };
@@ -383,33 +492,41 @@ async function fetchLiveVFootball(tries = 3) {
 }
 
 // ── Minting Live Booking Slips ─────────────────────────
-async function mintLiveBooking(leg) {
-  try {
-    const res = await fetch(`https://www.sportybet.com/api/${CC}/orders/share`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json;charset=UTF-8',
-        ...BASE_HEADERS
-      },
-      body: JSON.stringify({
-        selections: [{
-          eventId: leg.id,
-          marketId: String(leg.marketId),
-          specifier: leg.specifier || '',
-          outcomeId: String(leg.outcomeId)
-        }]
-      })
-    });
-    const j = await res.json();
-    if (j.bizCode === 10000 && j.data && (j.data.shareCode || j.data.bookingCode)) {
-      const code = j.data.shareCode || j.data.bookingCode;
-      const url = j.data.shareURL || `https://www.sportybet.com/${CC}/?shareCode=${code}`;
-      return { code, url };
+async function mintLiveBooking(leg, tries = 2) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(`https://www.sportybet.com/api/${CC}/orders/share`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json;charset=UTF-8',
+          ...BASE_HEADERS
+        },
+        body: JSON.stringify({
+          selections: [{
+            eventId: leg.id,
+            marketId: String(leg.marketId),
+            specifier: leg.specifier || '',
+            outcomeId: String(leg.outcomeId)
+          }]
+        })
+      });
+      const text = await res.text();
+      let j;
+      try { j = JSON.parse(text); } catch (_) { continue; }
+      if (j.bizCode === 10000 && j.data && (j.data.shareCode || j.data.bookingCode)) {
+        const code = j.data.shareCode || j.data.bookingCode;
+        const url = j.data.shareURL || `https://www.sportybet.com/${CC}/?shareCode=${code}`;
+        return { code, url };
+      }
+      if (i === tries - 1) {
+        return { err: j.message || 'Share code unavailable' };
+      }
+    } catch (e) {
+      if (i === tries - 1) return { err: e.message };
+      await sleep(500);
     }
-    return { err: j.message || 'Share code unavailable' };
-  } catch (e) {
-    return { err: e.message };
   }
+  return { err: 'Minting failed' };
 }
 
 // ── Single Scan ────────────────────────────────────────
@@ -419,15 +536,24 @@ async function scanQuestSpecial() {
   const events = await fetchLiveVFootball();
   if (!events.length) return null;
 
-  for (const ev of events) {
-    const min = minute(ev.playedSeconds);
-    const sc = scoreOf(ev);
+  for (const rawEv of events) {
+    const min = minute(rawEv.playedSeconds);
+    const sc = scoreOf(rawEv);
     if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
 
-    // Check each stage in priority order
-    const signal = checkHTUnder(ev, min, sc)
+    // Check if within any buffered sniper window
+    const inHT = rawEv.matchStatus === 'H1' && min >= 38.0 && min <= 43.5;
+    const inFT = rawEv.matchStatus === 'H2' && min >= 81.0 && min <= 86.5;
+    if (!inHT && !inFT) continue;
+
+    const ev = await enrichEventMarkets(rawEv);
+
+    // Check each stage in priority order:
+    // HT: 1. Handicap -> 2. Over/Under fallback -> 3. H1 winner
+    // FT: 1. Handicap -> 2. Over/Under fallback -> 3. Late winner/draw
+    const signal = checkHT(ev, min, sc)
       || checkHTResult(ev, min, sc)
-      || checkFTUnder(ev, min, sc)
+      || checkFT(ev, min, sc)
       || checkFTResult(ev, min, sc);
 
     if (signal) {
