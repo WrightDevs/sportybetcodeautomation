@@ -127,7 +127,7 @@ function checkHandicap(ev, min, sc, isHT) {
       const match = getOutcome(m, '1711');
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
         validPicks.push({
-          window: isHT ? '41min_ht_hcap' : '85min_ft_hcap',
+          window: isHT ? '41min_ht_hcap' : '78min_ft_hcap',
           type: isHT ? 'ht_handicap' : 'ft_handicap',
           marketId: mId,
           specifier: m.specifier,
@@ -135,7 +135,7 @@ function checkHandicap(ev, min, sc, isHT) {
           odds: match.odds,
           cushion: hMargin,
           description: `${stagePrefix} ${ev.homeTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} holds a +${hMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}].`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.homeTeamName} holds a +${hMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}] with pre-lock staking buffer.`,
           market: m,
           outcome: match.outcome
         });
@@ -147,7 +147,7 @@ function checkHandicap(ev, min, sc, isHT) {
       const match = getOutcome(m, '1713');
       if (match && match.odds >= MIN_ODDS && match.odds <= MAX_ODDS) {
         validPicks.push({
-          window: isHT ? '41min_ht_hcap' : '85min_ft_hcap',
+          window: isHT ? '41min_ht_hcap' : '78min_ft_hcap',
           type: isHT ? 'ht_handicap' : 'ft_handicap',
           marketId: mId,
           specifier: m.specifier,
@@ -155,7 +155,7 @@ function checkHandicap(ev, min, sc, isHT) {
           odds: match.odds,
           cushion: aMargin,
           description: `${stagePrefix} ${ev.awayTeamName} Handicap [${m.specifier}] (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} holds a +${aMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}].`,
+          reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. ${ev.awayTeamName} holds a +${aMargin} cushion on ${stagePrefix.toLowerCase()} handicap [${m.specifier}] with pre-lock staking buffer.`,
           market: m,
           outcome: match.outcome
         });
@@ -253,22 +253,18 @@ function checkHTResult(ev, min, sc) {
   return null;
 }
 
-// ── Timing Rule 3: 85′ FT (Window: 83.0′ – 85.5′, must be H2) ──
-// Priority 1: Handicap (Market 14)
-// Priority 2: Over/Under Fallback (Market 18)
-function checkFT(ev, min, sc) {
-  // Guard: must be in active second half starting from 83min with safe staking buffer before full-time whistle
-  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 85.5) return null;
-
-  // 1st Priority: Handicap
-  const hcap = checkHandicap(ev, min, sc, false);
-  if (hcap) return hcap;
-
-  // 2nd Priority (Fallback): Over/Under
-  return checkFTUnderFallback(ev, min, sc);
+// ── Timing Rule 3A: 75′–82′ FT Handicap ONLY (Window: 75.0′ – 82.0′, must be H2) ──
+// Handicap locks around 83′; finding it early at 75′-82′ ensures active markets and staking safety
+function checkFTHandicap(ev, min, sc) {
+  if (ev.matchStatus !== 'H2' || min < 75.0 || min > 82.0) return null;
+  return checkHandicap(ev, min, sc, false);
 }
 
-function checkFTUnderFallback(ev, min, sc) {
+// ── Timing Rule 3B: 83′–85.5′ FT Over/Under (Window: 83.0′ – 85.5′, must be H2) ──
+// At 83′+, Handicap is locked; Over/Under (Market 18) provides safe late-game staking
+function checkFTUnder(ev, min, sc) {
+  if (ev.matchStatus !== 'H2' || min < 83.0 || min > 85.5) return null;
+
   const total = sc.h + sc.a;
   const targetLine = total + 0.5;
 
@@ -291,7 +287,7 @@ function checkFTUnderFallback(ev, min, sc) {
         outcomeId: '13',
         odds: match.odds,
         description: `Full Time Under ${line} (${ev.homeTeamName} vs ${ev.awayTeamName} at ${Math.round(min)}')`,
-        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Handicap unavailable — Under ${line} fallback.`,
+        reasoning: `Score is ${sc.h}-${sc.a} at ${Math.round(min)}'. Late-game Under ${line} locked before final whistle.`,
         market: m,
         outcome: match.outcome
       };
@@ -494,19 +490,25 @@ async function scanQuestSpecial(userId = 'community') {
     const sc = scoreOf(rawEv);
     if (min == null || !sc) continue; // Invariant: No clock or score -> NEVER guess
 
-    // Check if within any buffered sniper window (40.0′-43.0′ HT, 83.0′-86.0′ FT)
+    // Check if within any buffered sniper window:
+    // 1. HT Window: 40.0′-43.0′ in H1 (1st Half Handicap & Under)
+    // 2. FT Handicap Window: 75.0′-82.0′ in H2 (Handicap ONLY - pre-lock window)
+    // 3. FT Late Window: 83.0′-86.0′ in H2 (FT Under & Late Result)
     const inHT = rawEv.matchStatus === 'H1' && min >= 40.0 && min <= 43.0;
-    const inFT = rawEv.matchStatus === 'H2' && min >= 83.0 && min <= 86.0;
-    if (!inHT && !inFT) continue;
+    const inFTHcap = rawEv.matchStatus === 'H2' && min >= 75.0 && min <= 82.0;
+    const inFTLate = rawEv.matchStatus === 'H2' && min >= 83.0 && min <= 86.0;
+    if (!inHT && !inFTHcap && !inFTLate) continue;
 
     const ev = await enrichEventMarkets(rawEv);
 
     // Check each stage in priority order:
-    // HT: 1. Handicap -> 2. Over/Under fallback -> 3. H1 winner
-    // FT: 1. Handicap -> 2. Over/Under fallback -> 3. Late winner/draw
+    // HT (40′-43′): 1. 1st Half Handicap -> 2. 1st Half Under fallback -> 3. H1 winner
+    // FT (75′-82′): FT Handicap ONLY (Market 14 - pre-lock window)
+    // FT (83′-86′): FT Under (Market 18) -> Late 1X2 Winner/Draw (Market 1)
     const signal = checkHT(ev, min, sc)
       || checkHTResult(ev, min, sc)
-      || checkFT(ev, min, sc)
+      || checkFTHandicap(ev, min, sc)
+      || checkFTUnder(ev, min, sc)
       || checkFTResult(ev, min, sc);
 
     if (signal) {
@@ -680,7 +682,8 @@ module.exports = {
   scanQuestSpecial,
   fetchLiveVFootball,
   checkHT,
-  checkFT,
+  checkFTHandicap,
+  checkFTUnder,
   checkHandicap,
   startSession,
   stopSession,

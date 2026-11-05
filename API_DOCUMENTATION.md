@@ -430,20 +430,21 @@ into half-time break.  favourite lock.                     into full time.      
   - **Team leading (e.g. `1-0`, `0-1`):** Selects **1st Half Winner** on the leading team.
 - **Reasoning:** Locks in the 1st Half result with safe time remaining before the referee sounds the halftime whistle.
 
-#### Rule 3: Full Time Sniper → Handicap Priority with Dynamic FT Under Fallback (83.0′ – 85.5′, Active H2)
-- **Clock Window:** 83.0′ – 85.5′ (Must be active `H2`, starting from minute 83 with safe staking buffer before full-time whistle).
-- **Target Logic:**
-  - **Priority 1 (Handicap):** Checks Market `14` (Handicap lines `hcp=1:0`, `hcp=2:0`, `hcp=0:1`, `hcp=0:2`, `hcp=3:0`) for active lines providing a $\ge 1$ goal cushion within odds band (`1.01` – `1.35`).
-  - **Priority 2 (O/U Fallback):** If handicap unavailable, falls back to `Under (Current Goals + 0.5)` in Market `18` (`Full Time Over/Under`).
-- **Reasoning:** With the match entering its closing stretch from minute 83, starting at 83.0′ gives users plenty of breathing space to stake before final whistle settlement.
+#### Rule 3: Full Time Handicap (75.0′ – 82.0′, Active H2)
+- **Clock Window:** 75.0′ – 82.0′ (Must be active `H2`).
+- **Target Logic:** Market `14` (**Full Time Handicap ONLY** with lines `hcp=1:0`, `hcp=2:0`, `hcp=0:1`, `hcp=0:2`, `hcp=3:0`) providing a $\ge 1$ goal cushion within odds band (`1.01` – `1.35`).
+- **Reasoning:** SportyBet typically locks/suspends Handicap markets around 83′. Sniping Handicap early at 75′–82′ ensures markets are active and gives users ample staking time before any suspension.
 
-#### Rule 4: Full Time Draw, 1X2 Winner, or Handicap (83.0′ – 86.0′, Active H2)
+#### Rule 4: Late Full Time Over/Under (83.0′ – 85.5′, Active H2)
+- **Clock Window:** 83.0′ – 85.5′ (Must be active `H2`).
+- **Target Logic:** Market `18` (`Full Time Over/Under`) at `Under (Current Goals + 0.5)` with odds in `1.01` – `1.35`.
+- **Reasoning:** At 83′+, Handicap is locked, but Over/Under remains open and highly predictable in the closing stretch.
+
+#### Rule 5: Late Full Time Result / Draw (83.0′ – 86.0′, Active H2)
 - **Clock Window:** 83.0′ – 86.0′ (Must be active `H2`).
 - **Lead-Based Logic:**
   - **Tied game (e.g. `0-0`, `1-1`, `2-2`):** Selects **Full Time Draw (X)** in Market `1`.
-  - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team. A 2-goal deficit cannot be overturned.
-  - **1-Goal Lead (e.g. `1-0`, `0-1`, `2-1`):** Selects **Handicap (Market `14`)** giving a +1.0 to +2.0 cushion (`hcp=1:0` or `hcp=2:0`) or 1X2 Match Winner on the leader.
-  - **Virtual Match (Silent Score):** Selects **1X2 Match Winner** on strong favorite or **Handicap cushion**.
+  - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team.
 
 ---
 
@@ -640,7 +641,7 @@ export function QuestSpecialWidget({ userId }: { userId: string }) {
       </div>
 
       <p className="text-sm text-gray-300 mb-4">
-        Background sniper targeting vFootball matches at 40′ (HT Handicap & O/U) and 83′ (FT Handicap & O/U). Mints a single-leg code the second criteria are met with ample staking breathing space.
+        Background sniper targeting vFootball matches at 40′ (HT Handicap & O/U), 75′–82′ (FT Handicap pre-lock), and 83′ (FT Under). Mints a single-leg code the second criteria are met with ample staking breathing space.
       </p>
 
       {result && (

@@ -79,7 +79,7 @@ const HELP = `<b>Welcome to SportyBet Daily Codes VIP!</b>\n\n`
   + `⚽ <b>Football</b> — real fixtures, ~10 odds accumulators\n`
   + `🕹 <b>eFootball</b> — in-play, leader by 3+ after 40′\n`
   + `⚡ <b>vFootball</b> — in-play & upcoming 3-min rounds\n`
-  + `🎯 <b>Quest Special</b> — live background sniper (40′ HT Handicap/Under, 83′ FT Handicap/Under)\n\n`
+  + `🎯 <b>Quest Special</b> — live background sniper (40′ HT Handicap/Under, 75′–82′ FT Handicap, 83′ FT Under)\n\n`
   + `<i>Booking codes are non-staking preparation slips.</i>`;
 
 function sendPaywall(chat) {
@@ -224,7 +224,7 @@ async function handleQuestSpecial(chat) {
     const status = getQuestSpecialStatus(chat);
     return send(chat, `⏳ <b>Quest Special is already actively scanning!</b>\n\n`
       + `• <b>Current Cycle:</b> Scan #${status.scans} (${status.runningFor}s elapsed)\n`
-      + `• <b>Target:</b> vFootball live matches (40′ HT Handicap & Under | 83′ FT Handicap & Under)\n`
+      + `• <b>Target:</b> vFootball live matches (40′ HT Handicap/Under | 75′–82′ FT Handicap | 83′ FT Under)\n`
       + `• <b>Today's Quota Used:</b> ${status.dailyUsed}/${status.maxDaily}\n\n`
       + `The bot will message you the second a qualifying match is detected!`, {
       reply_markup: {
@@ -246,7 +246,7 @@ async function handleQuestSpecial(chat) {
 
   await send(chat, `🎯 <b>Quest Special Activated!</b>\n\n`
     + `📡 <b>Live Scanner:</b> Running in background\n`
-    + `🎮 <b>Target:</b> vFootball live matches (40′ HT Handicap & Under | 83′ FT Handicap & Under)\n`
+    + `🎮 <b>Target:</b> vFootball live matches (40′ HT Handicap/Under | 75′–82′ FT Handicap | 83′ FT Under)\n`
     + `🎫 <b>Format:</b> Single-leg sniper slip\n`
     + `📊 <b>Today's Quota:</b> ${dailyUsed + 1}/${QUEST_SPECIAL_MAX_DAILY}\n\n`
     + `<i>Stand by… You will receive an instant notification here the moment a qualifying match appears!</i>`, {
@@ -261,7 +261,7 @@ async function handleQuestSpecial(chat) {
   startQuestSpecial(chat, async (result, timedOut) => {
     if (timedOut) {
       return send(chat, `⏳ <b>Quest Special: Cycle Concluded</b>\n\n`
-        + `No live vFootball game reached qualifying criteria (40′ HT Handicap & Under, 83′ FT Handicap & Under) during this scan window.\n\n`
+        + `No live vFootball game reached qualifying criteria (40′ HT Handicap/Under, 75′–82′ FT Handicap, 83′ FT Under) during this scan window.\n\n`
         + `Tap below to scan the next upcoming round:`, {
         reply_markup: {
           inline_keyboard: [
