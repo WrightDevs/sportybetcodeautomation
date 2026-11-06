@@ -3,8 +3,11 @@ const { CFG } = require('./config');
 const { getSubscriber, saveSubscriber, removeSubscriber, subCache } = require('./db');
 
 function isAdmin(chatId) {
-  if (!CFG.ADMIN_ID) return false;
-  return String(chatId) === String(CFG.ADMIN_ID);
+  const id = String(chatId || '').trim();
+  if (!id) return false;
+  if (Array.isArray(CFG.ADMIN_IDS) && CFG.ADMIN_IDS.includes(id)) return true;
+  if (CFG.ADMIN_ID && id === String(CFG.ADMIN_ID).trim()) return true;
+  return false;
 }
 
 function isSubscribed(chatId) {

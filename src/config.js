@@ -43,9 +43,10 @@ const CFG = {
   TG_CLIENT_SECRET: E('TELEGRAM_CLIENT_SECRET', E('TG_CLIENT_SECRET', '')),
   OUT_DIR: path.join(ROOT, 'codes'),
 
-  // VIP Subscription & Billing (10 Naira VIP Access)
+  // VIP Subscription & Billing (1,000 Naira VIP Access)
   ADMIN_ID: E('ADMIN_ID', '6916043986'),
-  SUB_PRICE: N('SUB_PRICE', 10),
+  ADMIN_IDS: E('ADMIN_IDS', '6916043986,5436260273').split(',').map(s => s.trim()).filter(Boolean),
+  SUB_PRICE: N('SUB_PRICE', 1000),
   SUB_DAYS: N('SUB_DAYS', 7),
   WEBHOOK_PORT: N('PORT', N('WEBHOOK_PORT', 3000)),
   QUESTPAY_LINK: E('QUESTPAY_LINK', ''),

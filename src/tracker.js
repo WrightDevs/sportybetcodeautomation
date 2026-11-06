@@ -313,7 +313,7 @@ async function settlePendingSlips(onBoom = null) {
  */
 function getUserStats(userId) {
   const idStr = String(userId || '');
-  const isAdminUser = idStr === String(CFG.ADMIN_ID || '6916043986');
+  const isAdminUser = (Array.isArray(CFG.ADMIN_IDS) && CFG.ADMIN_IDS.includes(idStr)) || idStr === String(CFG.ADMIN_ID || '6916043986');
   const slips = loadSlips().filter(s =>
     s.userId === idStr || (isAdminUser && (s.userId === 'community' || s.userId === 'test_user'))
   );
