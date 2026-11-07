@@ -53,6 +53,7 @@ function isUnlimitedUser(userId) {
   const id = String(userId || '').trim();
   if (!id) return false;
   if (isAdmin && isAdmin(id)) return true;
+  if (Array.isArray(CFG.ADMIN_IDS) && CFG.ADMIN_IDS.includes(id)) return true;
   if (id === String(CFG.ADMIN_ID || '6916043986')) return true;
   return false;
 }
