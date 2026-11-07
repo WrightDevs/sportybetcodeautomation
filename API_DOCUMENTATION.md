@@ -118,30 +118,32 @@ if (data.success && data.codes?.length > 0) {
 ```
 
 #### Step 5: Quest Special (Live Virtual Sniper)
-Quest Special is a real-time live background sniper for virtual football. Matches are sniped at exact clock marks with buffered staking time before whistles blow:
+Quest Special scans live virtual football, picks the **safest handicap-first** leg(s) at minute 40 (half-time markets) and minute 80 (full-time markets), and mints a SportyBet booking code only when the safety bar is met. If nothing is safe it returns *no safe slip* (never a forced pick):
 ```ts
-// 1. Start background scan:
+// 1. Start background scan (mode: 'any' | 'handicap' | 'ou', legs: 1 for a single, 5 for a combo):
 await fetch('https://sportybetcodeautomation.onrender.com/api/quest-special/start', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ userId: user._id || user.email })
+  body: JSON.stringify({ userId: user._id || user.email, mode: 'any', legs: 1 })
 });
 
-// 2. Poll status every 3 seconds:
+// 2. Poll status every 3-4 seconds:
 const poll = setInterval(async () => {
   const res = await fetch(`https://sportybetcodeautomation.onrender.com/api/quest-special/status/${user._id || user.email}`);
   const status = await res.json();
-
-  if (status.lastResult && !status.lastResult.timedOut) {
-    clearInterval(poll);
-    const slip = status.lastResult;
-    console.log('Sniper Locked Match:', slip.home, 'vs', slip.away);
-    console.log('Booking Code:', slip.code);       // e.g. "GU2JGA"
-    console.log('Direct Booking URL:', slip.url); // e.g. "http://www.sportybet.com/ng/?shareCode=GU2JGA"
-    console.log('Pick:', slip.analysis.description);
-    console.log('Odds:', slip.analysis.odds);
+  const r = status.lastResult;
+  if (!r) return;                       // still scanning
+  clearInterval(poll);
+  if (r.timedOut) {
+    console.log('No safe slip this round:', r.noSafeSlip?.reasons);
+    return;
   }
-}, 3000);
+  const picks = r.isMultiLeg ? r.legs : [r];
+  console.log('Booking Code:', r.code);          // e.g. "GU2JGA"
+  console.log('Direct Booking URL:', r.url);
+  console.log('Joint probability:', r.jointProb); // high probability, never guaranteed
+  picks.forEach(p => console.log(p.description, '@' + p.odds, 'prob', p.prob, 'score', p.safetyScore));
+}, 3500);
 ```
 
 ---
@@ -379,7 +381,7 @@ Returns metadata for all available sports to populate UI tabs and buttons.
       "id": "quest_special",
       "name": "Quest Special",
       "icon": "🎯",
-      "desc": "Live background sniper: vFootball at 41′ (HT Under), 43′ (H1 Winner), 85′ (FT Under), 88′ (Late Lead/Hcap)"
+      "desc": "Live vFootball sniper: handicap-first safe selection at 40′ (half-time) and 80′ (full-time); Under / No GG only as a stricter fallback"
     }
   ]
 }
@@ -389,161 +391,162 @@ Returns metadata for all available sports to populate UI tabs and buttons.
 
 ## 3. Quest Special APIs (Live Sniper)
 
-### Overview & Philosophy
-**Quest Special** is a specialized real-time in-play sniper engine built exclusively for **vFootball (Virtual Football)** live matches (`sr:sport:202120001` & `sr:sport:137`). 
+### Overview
+**Quest Special** is a real-time in-play engine for **vFootball (virtual football)** (`sr:sport:202120001`). Every ~3.5 seconds it reads the live feed, scores every candidate leg with a probability model, and mints a SportyBet **booking code** (never a stake) only when a leg (or slip) clears the safety bar. If nothing clears the bar it keeps scanning and returns **no safe slip** instead of lowering the bar.
 
-Unlike multi-leg accumulators, Quest Special mints **single-leg (1-leg)** high-confidence booking codes. Virtual football matches run on a compressed 3-minute cycle (90 virtual minutes simulated in ~180 real seconds, where 1 virtual minute = 2 real seconds). At exact live clock intervals, high-probability betting opportunities emerge.
+> A slip is **high probability, never guaranteed.** Virtual football is simulated; calibrate against real settled results before relying on the numbers (see the README "Quest Special safe selector" section and `npm run settle`).
 
-Quest Special continuously scans live vFootball rounds in the background, identifies qualifying fixtures at exact minute marks, immediately mints a single-leg SportyBet booking code, and delivers it to the user.
+### Selection logic (what the API result means)
 
----
+| Step | Rule |
+| :--- | :--- |
+| **Window** | Half-time markets are considered from **40:00 to 43:00** (active `H1`). Full-time markets from **80:00 to 86:00** (active `H2`). Clock = `playedSeconds`; a match without a clock or score is skipped. |
+| **Pool** | One leg per match. Only active markets (`status 0`, not banned, outcome active). |
+| **Probability** | The remaining-goal rate is fitted from the match's own live Over/Under ladder, then every leg is priced with a Poisson model of the remaining goals given the current score. The leg's own de-vigged market price is a cross-check. `prob` is the **lower** of the two. The time window is treated as effective playing time (HT 40 / FT 80), so remaining risk is scaled by 45/40 (HT) and 90/80 (FT). |
+| **Hard filters** | `prob >= 0.78`, odds `1.10 – 1.35`, model/market gap `<= 0.10`; straight 1X2 wins only if `prob >= 0.85` and no Double Chance leg is available. |
+| **Handicap first** | **Tier 1 = Handicap + Double Chance (+0.5)** is always preferred. **Fallbacks** are used only when no tier-1 leg survives (or to fill remaining slots of a multi-leg slip): **No GG** (tier 2), then **Under** (tier 3), then straight results (tier 4). Fallback legs must clear a stricter `prob >= 0.85`. |
+| **Safety score** | 0–100: probability (70%), coherence (15%), market-type safety (10%), league (5%). Ranks legs inside a tier. |
+| **Slip** | Joint probability = product of leg probabilities must be `>= 0.45`, no two legs sharing a team. Otherwise **no safe slip**. |
+| **LLM veto** | Multi-leg only, 2 s budget, fail-open. May only drop a leg (replaced from reserves); never adds legs or changes numbers. |
+| **Booking** | `POST /orders/share` only. There is no staking code path. |
 
-### Exact Quest Special 4-Stage Live Rules & Decision Logic
+All thresholds are configurable by environment variable (`SEL_MIN_LEG_PROB`, `SEL_MIN_FALLBACK_PROB`, `SEL_MIN_SLIP_PROB`, `SEL_WINDOW_HT`, `SEL_WINDOW_FT`, `SEL_PREFER_HANDICAP`, …; see `.env.example`).
 
-```
-                             [ Live vFootball Match Detected ]
-                                             │
-      ┌─────────────────────┬────────────────┴──────────────────┬─────────────────────┐
-      │                     │                                   │                     │
-   At 41′ (HT)           At 43′ (H1)                         At 85′ (FT)           At 88′ (FT)
-  HT Under 0.5          Winner of H1                        FT Under 0.5      Late Lead & Handicap
-      │                     │                                   │                     │
-      ▼                     ▼                                   ▼                     ▼
-[ Under 0.5 HT ]       [ 1st Half 1X2 ]                    [ Under Line ]        Lead Evaluation:
-Market 68 (total=0.5)  Market 60                           Market 18 Under       • 2+ Lead ➔ 1X2 Winner
-Imminent whistle       Leader or 1st Half                  Imminent FT whistle   • 1 Lead  ➔ Handicap / 1X2
-into half-time break.  favourite lock.                     into full time.       • Virtual ➔ Fav / Cushion
-```
+> **5-leg slips:** five legs at ~0.80 give ~0.33 joint probability, below the 0.45 bar, so 5-leg requests frequently end with *no safe slip*. That is intentional.
 
-#### Rule 1: Half Time Sniper → Handicap Priority with Dynamic Under Fallback (40.0′ – 42.5′, Active H1)
-- **Clock Window:** 40.0′ – 42.5′ (Must be active `H1`, starting from minute 40 with safe staking buffer before HT whistle).
-- **Target Logic:**
-  - **Priority 1 (Handicap):** Checks Market `65` (1st Half Handicap) for active lines providing a $\ge 1$ goal cushion within odds band (`1.05` – `1.35`).
-  - **Priority 2 (O/U Fallback):** If handicap unavailable, falls back to `Under (Current Goals + 0.5)` in Market `68` (`1st Half - Over/Under`) with odds $\ge 1.05$.
-- **Reasoning:** In virtual football, closing minutes of the 1st half have virtually no goal conversion. Starting at 40.0′ gives the user the ideal staking window before the halftime whistle.
-
-#### Rule 2: 41 Minutes → 1st Half Winner or 1st Half Draw (40.0′ – 43.0′, Active H1)
-- **Clock Window:** 40.0′ – 43.0′ (Must be active `H1`, preserving buffer before half-time).
-- **Market Targeted:** Market `60` (`1st Half - 1X2`).
-- **Selection:**
-  - **Tied game (e.g. `0-0`, `1-1`):** Selects **1st Half Draw (X)**. Whistle is imminent and game will reach the break level.
-  - **Team leading (e.g. `1-0`, `0-1`):** Selects **1st Half Winner** on the leading team.
-- **Reasoning:** Locks in the 1st Half result with safe time remaining before the referee sounds the halftime whistle.
-
-#### Rule 3: Full Time Handicap (75.0′ – 82.0′, Active H2)
-- **Clock Window:** 75.0′ – 82.0′ (Must be active `H2`).
-- **Target Logic:** Market `14` (**Full Time Handicap ONLY** with lines `hcp=1:0`, `hcp=2:0`, `hcp=0:1`, `hcp=0:2`, `hcp=3:0`) providing a $\ge 1$ goal cushion within odds band (`1.05` – `1.35`).
-- **Reasoning:** SportyBet typically locks/suspends Handicap markets around 83′. Sniping Handicap early at 75′–82′ ensures markets are active and gives users ample staking time before any suspension.
-
-#### Rule 4: Late Full Time Over/Under (83.0′ – 85.5′, Active H2)
-- **Clock Window:** 83.0′ – 85.5′ (Must be active `H2`).
-- **Target Logic:** Market `18` (`Full Time Over/Under`) at `Under (Current Goals + 0.5)` with odds in `1.05` – `1.35`.
-- **Reasoning:** At 83′+, Handicap is locked, but Over/Under remains open and highly predictable in the closing stretch.
-
-#### Rule 5: Late Full Time Result / Draw (83.0′ – 86.0′, Active H2)
-- **Clock Window:** 83.0′ – 86.0′ (Must be active `H2`).
-- **Lead-Based Logic:**
-  - **Tied game (e.g. `0-0`, `1-1`, `2-2`):** Selects **Full Time Draw (X)** in Market `1`.
-  - **2+ Goal Lead (e.g. `2-0`, `0-2`, `3-1`):** Selects **1X2 Match Winner (Market `1`)** on the leading team.
-
----
-
-### Operational Constraints & Lifecycle
-- **Scan Interval:** Polls SportyBet factsCenter every **3 seconds**.
-- **Execution Lifespan:** Runs for up to **10 minutes** across multiple active and incoming virtual rounds until a qualifying match hits.
-- **Daily Quota:** Limited to **20 activations per user per calendar day** (resets at 00:00 UTC).
-- **VIP Protection:** Only available to users with active VIP subscriptions. Free/expired users receive `403 Forbidden`.
-- **Boom Tracking:** Every generated slip is recorded in MongoDB with `isQuestSpecial: true` and automatically tracked for personal and global win rate analytics.
+### Operational constraints
+- **Scan interval:** 3.5 seconds.
+- **Lifespan:** up to **10 minutes** per session. If no safe slip appears the session ends with `lastResult.timedOut = true` (and a `noSafeSlip` explanation).
+- **Daily quota:** 20 activations per user per day (admins unlimited). Counted only when a slip is found.
+- **VIP only:** non-VIP users receive `403`.
+- **Boom tracking:** every minted slip is stored with `isQuestSpecial: true`; each leg is settled by market/outcome (half-time markets use the half-time score).
 
 ---
 
 ### Start Background Session
-Starts background scanning for the user. When games qualify, the slip (single-leg sniper or 5-leg accumulator) is minted automatically. Users can pick their preferred market strategy (`handicap`, `ou`, or `any`) and ticket format (`legs: 1` or `legs: 5`).
-
 - **Endpoint:** `/api/quest-special/start`
 - **Method:** `POST`
 - **Headers:** `Content-Type: application/json`
 
-#### Request Body
 ```json
 {
   "userId": "6916043986",
-  "mode": "handicap",
-  "legs": 5
+  "mode": "any",
+  "legs": 1
 }
 ```
-*Parameters:*
-- `mode`:
-  - `"mix"` / `"any"`: (Recommended Default) Finds Handicap first; if unavailable/locked, falls back to safe Under lines (at 42' HT or 75'+ FT), H1 handicap, or No GG.
-  - `"handicap"`: Strictly targets goal cushions (European Handicap +1/+2/+3 cushions & Double Chance +0.5).
-  - `"ou"`: Strictly targets goal-line Under markets (HT Under & FT Under).
-- `legs`: (Optional, default `1`)
-  - `1`: Single-leg sniper slip.
-  - `5`: 5-leg live accumulator combo combining 5 distinct live match cushions in 1 SportyBet code.
 
-#### Success Response (`200 OK`)
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `userId` | string | **Required.** Mongo `_id`, email, username or Telegram id. |
+| `mode` | string | `"any"` / `"mix"` (default, **handicap first**, then No GG / Under fallback), `"handicap"` (handicap + Double Chance only, with the existing No GG fallback on a 3+ goal lead), `"ou"` (Under lines only; still needs `prob >= 0.85`). |
+| `legs` | number | `1` (default) single leg, or `2`–`10` multi-leg accumulator (`5` is the common combo). |
+
+#### Success (`200 OK`)
 ```json
 {
   "success": true,
   "userId": "6916043986",
-  "mode": "handicap",
-  "legs": 5,
-  "message": "🔍 Quest Special (5-Leg HANDICAP) activated! Scanning live vFootball matches…",
+  "mode": "any",
+  "legs": 1,
+  "message": "🔍 Quest Special (ANY) activated! Scanning live vFootball matches…",
   "dailyUsed": 0,
   "maxDaily": "Unlimited",
   "isUnlimited": true
 }
 ```
+`maxDaily` is a number (`20`) for normal users and the string `"Unlimited"` for admins.
 
-#### VIP Required Response (`403 Forbidden`)
-```json
-{
-  "success": false,
-  "error": "VIP subscription required to activate Quest Special"
-}
-```
+#### Errors
+| Status | Body |
+| :--- | :--- |
+| `400` | `{ "success": false, "error": "userId is required" }` or `"Quest Special is already active…"` / daily limit reached |
+| `403` | `{ "success": false, "error": "VIP subscription required to activate Quest Special" }` |
 
 ---
 
 ### Check Session Status / Result
-Poll every 3–5 seconds from the web dashboard while Quest Special is active:
+Poll every 3–5 seconds while active.
 
 - **Endpoint:** `/api/quest-special/status/:userId`
 - **Method:** `GET`
-- **Example:** `/api/quest-special/status/6916043986`
 
-#### Response While Scanning (`200 OK`)
+#### While scanning
 ```json
 {
   "success": true,
   "userId": "6916043986",
   "active": true,
   "mode": "any",
-  "legs": 5,
+  "legs": 1,
   "scans": 3,
   "runningFor": 24,
   "dailyUsed": 0,
-  "maxDaily": "Unlimited",
-  "isUnlimited": true,
+  "maxDaily": 20,
+  "isUnlimited": false,
   "lastResult": null
 }
 ```
 
-#### Response When Multi-Leg Accumulator Found (`200 OK`)
+#### Single leg found
 ```json
 {
   "success": true,
   "userId": "6916043986",
   "active": false,
-  "mode": "any",
-  "legs": 5,
   "dailyUsed": 1,
-  "maxDaily": "Unlimited",
-  "isUnlimited": true,
+  "maxDaily": 20,
+  "isUnlimited": false,
+  "lastResult": {
+    "isMultiLeg": false,
+    "eventId": "sr:match:200026110531420",
+    "home": "CHE",
+    "away": "HUL",
+    "league": "Virtual",
+    "minute": 83,
+    "homeScore": 1,
+    "awayScore": 2,
+    "odds": 1.11,
+    "description": "Full Time CHE Handicap [hcp=2:0] (CHE vs HUL at 83')",
+    "reasoning": "Score is 1-2 at 83'. CHE holds a +1 cushion on full time handicap [hcp=2:0].",
+    "prob": 0.8681,
+    "safetyScore": 78,
+    "jointProb": 0.8681,
+    "analysis": {
+      "category": "handicap",
+      "window": "ft_handicap",
+      "type": "ft_handicap",
+      "marketId": "14",
+      "specifier": "hcp=2:0",
+      "outcomeId": "1711",
+      "odds": 1.11,
+      "cushion": 1,
+      "description": "Full Time CHE Handicap [hcp=2:0] (CHE vs HUL at 83')",
+      "reasoning": "Score is 1-2 at 83'. CHE holds a +1 cushion on full time handicap [hcp=2:0].",
+      "prob": 0.8681,
+      "safetyScore": 78
+    },
+    "mode": "any",
+    "code": "BC9X2A",
+    "url": "https://www.sportybet.com/ng/?shareCode=BC9X2A",
+    "mintError": null,
+    "timestamp": 1741234567890
+  }
+}
+```
+*Existing fields are unchanged. New in this version:* `prob`, `safetyScore`, `jointProb`, `analysis.prob`, `analysis.safetyScore`. `analysis` also carries the raw SportyBet `market` and `outcome` objects the pick came from (ignore them in UIs). `analysis.type` tells you the market family (`*_handicap` / `*_double_chance` = tier 1; `*_nogg`, `*_under`, results = fallback).
+
+#### Multi-leg slip found
+```json
+{
+  "success": true,
+  "userId": "6916043986",
+  "active": false,
   "lastResult": {
     "isMultiLeg": true,
     "legsCount": 5,
     "totalOdds": 1.62,
+    "jointProb": 0.47,
     "code": "ZNM4T0",
     "url": "https://www.sportybet.com/ng/?shareCode=ZNM4T0",
     "mode": "any",
@@ -553,88 +556,82 @@ Poll every 3–5 seconds from the web dashboard while Quest Special is active:
         "eventId": "sr:match:200026110522226",
         "home": "ALA",
         "away": "ELC",
-        "league": "vFootball",
-        "minute": 77,
+        "league": "Virtual",
+        "minute": 83,
         "homeScore": 0,
         "awayScore": 0,
         "odds": 1.07,
-        "description": "Full Time ELC Handicap [hcp=0:1] (ALA vs ELC at 77')",
-        "reasoning": "Score is 0-0 at 77'. ELC holds a +1 cushion on full time handicap [hcp=0:1]."
+        "description": "Full Time ELC Handicap [hcp=0:1] (ALA vs ELC at 83')",
+        "reasoning": "Score is 0-0 at 83'. ELC holds a +1 cushion on full time handicap [hcp=0:1].",
+        "prob": 0.89,
+        "safetyScore": 81,
+        "analysis": { "type": "ft_handicap", "marketId": "14", "specifier": "hcp=0:1", "outcomeId": "1713", "odds": 1.07, "prob": 0.89, "safetyScore": 81 }
       }
     ]
   }
 }
 ```
 
-#### Response When Single-Leg Found (`200 OK`)
+#### Cycle ended with no safe slip
 ```json
 {
   "success": true,
   "userId": "6916043986",
   "active": false,
-  "dailyUsed": 1,
-  "maxDaily": "Unlimited",
-  "isUnlimited": true,
-  "lastResult": {
-    "isMultiLeg": false,
-    "code": "BC9X2A",
-    "url": "https://www.sportybet.com/ng/?shareCode=BC9X2A",
-    "home": "Manchester City",
-    "away": "Liverpool",
-    "league": "vFootball Premier League",
-    "minute": 80,
-    "homeScore": 0,
-    "awayScore": 2,
-    "analysis": {
-      "window": "ft_handicap",
-      "type": "ft_handicap",
-      "description": "Full Time Liverpool Handicap [hcp=0:3]",
-      "odds": 1.12,
-      "reasoning": "Away leads 0-2 by 2 goals at 80'. Strong Match Winner."
-    },
-    "timestamp": 1741234567890
-  }
-}
-```
-
-#### Response When Cycle Ends With No Match (`200 OK`)
-```json
-{
-  "success": true,
-  "userId": "6916043986",
-  "active": false,
-  "dailyUsed": 0,
-  "maxDaily": "Unlimited",
-  "isUnlimited": true,
   "lastResult": {
     "timedOut": true,
-    "timestamp": 1741234747000
+    "timestamp": 1741234747000,
+    "mode": "any",
+    "legs": 5,
+    "noSafeSlip": {
+      "timestamp": 1741234745000,
+      "reasons": ["only 3/5 legs passed the safety filters"],
+      "considered": 3,
+      "inWindow": 10,
+      "rejected": {
+        "odds<MIN_LEG_ODDS": 21,
+        "prob #<MIN_LEG_PROB": 5,
+        "fallback prob #<MIN_FALLBACK_PROB": 6
+      }
+    }
   }
 }
 ```
+`noSafeSlip` is `null` when no match was inside the 40:00–43:00 / 80:00–86:00 window during the session. `reasons` is a human-readable summary; `rejected` counts why candidate legs were filtered out (numbers in the keys are normalised to `#`).
 
 ---
 
 ### Stop Background Session
-Cancels active scanning if the user navigates away or clicks Cancel:
-
 - **Endpoint:** `/api/quest-special/stop`
 - **Method:** `POST`
-- **Headers:** `Content-Type: application/json`
 
 ```json
-{
-  "userId": "6916043986"
-}
+{ "userId": "6916043986" }
 ```
+Response: `{ "success": true, "userId": "...", "stopped": true, "message": "Quest Special stopped successfully" }`
 
 ---
 
 ### Instant Live Scan (One-Off)
-Directly probes live in-play vFootball fixtures right now without starting a background poller:
+Runs the selector once, right now, without a background session. **This mints a real booking code when a safe slip is found.**
 
-- **Endpoint:** `/api/quest-special/scan?mode=handicap&legs=5` (or `legs=1`)
+- **Endpoint:** `/api/quest-special/scan?mode=any&legs=1`
 - **Method:** `GET`
+
+Found: `{ "success": true, "found": true, "mode": "any", "legs": 1, "signal": { …same shape as lastResult… } }`
+
+Nothing safe right now:
+```json
+{
+  "success": true,
+  "found": false,
+  "mode": "any",
+  "legs": 1,
+  "message": "No safe slip right now for the any criteria.",
+  "noSafeSlip": { "reasons": ["only 0/1 legs passed the safety filters"], "considered": 0, "inWindow": 0, "rejected": {}, "timestamp": 1741234745000 }
+}
+```
+(`noSafeSlip` may be `null`.)
 
 ---
 
@@ -647,19 +644,20 @@ import { startQuestSpecial, getQuestSpecialStatus, stopQuestSpecial } from '@/li
 
 export function QuestSpecialWidget({ userId }: { userId: string }) {
   const [active, setActive] = useState(false);
-  const [strategy, setStrategy] = useState<'handicap' | 'ou' | 'any'>('handicap');
+  const [mode, setMode] = useState<'any' | 'handicap' | 'ou'>('any');
+  const [legs, setLegs] = useState(1);
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState('Idle');
   const [result, setResult] = useState<any>(null);
 
-  const handleStart = async (chosenMode: 'handicap' | 'ou' | 'any' = strategy) => {
+  const handleStart = async () => {
     setLoading(true);
     setResult(null);
-    const res = await startQuestSpecial(userId, chosenMode);
+    const res = await startQuestSpecial(userId, mode, legs);
     setLoading(false);
     if (res.success) {
       setActive(true);
-      setStatusText(`Scanning live vFootball (${chosenMode.toUpperCase()})…`);
+      setStatusText(`Scanning live vFootball (${mode.toUpperCase()}, ${legs} leg${legs > 1 ? 's' : ''})…`);
     } else {
       alert(res.error || 'Failed to activate Quest Special');
     }
@@ -671,50 +669,54 @@ export function QuestSpecialWidget({ userId }: { userId: string }) {
     setStatusText('Cancelled');
   };
 
-  // Poll status while active
   useEffect(() => {
     if (!active) return;
     const interval = setInterval(async () => {
       const data = await getQuestSpecialStatus(userId);
-      if (data.lastResult) {
-        if (data.lastResult.timedOut) {
-          setStatusText('Round ended with no qualifying games. Tap to scan next round!');
-        } else {
-          setResult(data.lastResult);
-          setStatusText('🎯 Qualifying signal found!');
-        }
-        setActive(false);
+      const r = data.lastResult;
+      if (!r) return;
+      setActive(false);
+      if ('timedOut' in r && r.timedOut) {
+        setStatusText(
+          r.noSafeSlip?.reasons?.[0]
+            ? `No safe slip this round (${r.noSafeSlip.reasons[0]}).`
+            : 'No match reached the safety bar this round.'
+        );
+      } else {
+        setResult(r);
+        setStatusText('Safe slip found');
       }
     }, 3500);
-
     return () => clearInterval(interval);
   }, [active, userId]);
 
+  // Normalise single vs multi-leg to a list of legs
+  const legsList = result ? (result.isMultiLeg ? result.legs : [result]) : [];
+
   return (
     <div className="p-6 bg-gray-900 border border-yellow-500/30 rounded-xl text-white">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-xl font-bold flex items-center gap-2">🎯 Quest Special (Live Sniper)</h3>
-        <span className="text-xs bg-yellow-500/20 text-yellow-300 px-2 py-1 rounded">VIP Exclusive</span>
-      </div>
-
+      <h3 className="text-xl font-bold mb-2">🎯 Quest Special (Live Sniper)</h3>
       <p className="text-sm text-gray-300 mb-4">
-        Background sniper targeting vFootball matches at 40′ (HT Handicap & O/U), 75′–82′ (FT Handicap pre-lock), and 83′ (FT Under). Mints a single-leg code the second criteria are met with ample staking breathing space.
+        Handicap-first safe selection on live vFootball at 40′ (half-time) and 80′ (full-time). High probability, never guaranteed.
       </p>
 
       {result && (
         <div className="p-4 bg-green-950/60 border border-green-500 rounded-lg mb-4">
-          <div className="flex justify-between items-center mb-2">
-            <span className="font-bold text-green-400">🟢 SIGNAL DETECTED</span>
-            <span className="text-sm bg-green-800 px-2 py-0.5 rounded">@{result.analysis.odds}</span>
-          </div>
-          <p className="font-semibold">{result.home} vs {result.away} ({result.minute}′ — {result.homeScore}:{result.awayScore})</p>
-          <p className="text-sm text-yellow-300 mt-1">Pick: {result.analysis.description}</p>
-          <p className="text-xs text-gray-400 mt-1 italic">{result.analysis.reasoning}</p>
-
+          {result.isMultiLeg && (
+            <p className="text-sm mb-2">{result.legsCount} legs @ {result.totalOdds} (joint probability {(result.jointProb * 100).toFixed(0)}%)</p>
+          )}
+          {legsList.map((l: any) => (
+            <div key={l.eventId} className="mb-2">
+              <p className="font-semibold">{l.home} vs {l.away} ({l.minute}′ — {l.homeScore}:{l.awayScore})</p>
+              <p className="text-sm text-yellow-300">
+                {l.description} @{l.odds} · {(l.prob * 100).toFixed(0)}% · score {l.safetyScore}
+              </p>
+            </div>
+          ))}
           {result.code && (
             <div className="mt-3 flex items-center justify-between bg-black/40 p-2 rounded">
               <span className="font-mono text-lg font-bold text-yellow-400">{result.code}</span>
-              <a href={result.url} target="_blank" rel="noreferrer" className="text-xs bg-red-600 hover:bg-red-700 px-3 py-1.5 rounded font-bold">
+              <a href={result.url} target="_blank" rel="noreferrer" className="text-xs bg-red-600 px-3 py-1.5 rounded font-bold">
                 Open in SportyBet ↗
               </a>
             </div>
@@ -724,18 +726,11 @@ export function QuestSpecialWidget({ userId }: { userId: string }) {
 
       <div className="flex items-center gap-3">
         {!active ? (
-          <button
-            onClick={handleStart}
-            disabled={loading}
-            className="px-5 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-black font-bold rounded-lg transition"
-          >
+          <button onClick={handleStart} disabled={loading} className="px-5 py-2.5 bg-yellow-500 text-black font-bold rounded-lg">
             {loading ? 'Activating…' : '🎯 Activate Quest Special'}
           </button>
         ) : (
-          <button
-            onClick={handleStop}
-            className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg transition"
-          >
+          <button onClick={handleStop} className="px-5 py-2.5 bg-red-600 text-white font-bold rounded-lg">
             🛑 Stop Scanning
           </button>
         )}
@@ -745,65 +740,6 @@ export function QuestSpecialWidget({ userId }: { userId: string }) {
   );
 }
 ```
-  "scans": 3,
-  "runningFor": 24,
-  "dailyUsed": 1,
-  "maxDaily": 20,
-  "lastResult": null
-}
-```
-
-#### Response When Game Found (`200 OK`)
-```json
-{
-  "success": true,
-  "userId": "6916043986",
-  "active": false,
-  "dailyUsed": 1,
-  "maxDaily": 20,
-  "lastResult": {
-    "code": "BC9X2A",
-    "url": "https://www.sportybet.com/ng/?shareCode=BC9X2A",
-    "home": "Manchester City",
-    "away": "Liverpool",
-    "league": "vFootball Premier League",
-    "minute": 80,
-    "homeScore": 0,
-    "awayScore": 2,
-    "analysis": {
-      "window": "80min",
-      "type": "match_winner",
-      "description": "Away to Win (0-2 at 80')",
-      "odds": 1.12,
-      "reasoning": "Away leads 0-2 by 2 goals at 80'. Strong Match Winner."
-    },
-    "timestamp": 1741234567890
-  }
-}
-```
-
----
-
-### Stop Background Session
-Cancels active scanning if the user navigates away or cancels:
-
-- **Endpoint:** `/api/quest-special/stop`
-- **Method:** `POST`
-- **Headers:** `Content-Type: application/json`
-
-```json
-{
-  "userId": "6916043986"
-}
-```
-
----
-
-### Instant Live Scan (One-Off)
-Directly probes live in-play vFootball fixtures right now without starting a background poller:
-
-- **Endpoint:** `/api/quest-special/scan`
-- **Method:** `GET`
 
 ---
 
@@ -914,7 +850,7 @@ Returns the latest slips for live tickers, proof tickers, or recent activity str
 
 ---
 
-## 4. Payment & QuestPay Checkout
+## 5. Payment & QuestPay Checkout
 
 ### Initialize Web Checkout
 Used when a user clicks "Upgrade to VIP" on the web dashboard. Automatically links the checkout to their Telegram ID so both platforms get credited.
@@ -983,7 +919,7 @@ Configured inside the QuestPay Merchant Dashboard under **Webhook Settings**:
 
 ---
 
-## 5. Next.js / TypeScript Integration Client
+## 6. Next.js / TypeScript Integration Client
 
 Your friend can copy this file into their Next.js project under `lib/sportyApi.ts`:
 
@@ -1051,32 +987,89 @@ export interface UserStatsResponse {
   };
 }
 
+export interface QuestSpecialAnalysis {
+  category?: string;            // 'handicap' | 'nogg' | 'ou' | 'result'
+  window: string;
+  type: string;                 // ft_handicap, ht_handicap, ft_double_chance, ht_double_chance (tier 1);
+                                // ft_nogg, ht_nogg, ft_under, ht_under, results (fallbacks)
+  marketId: string;
+  specifier: string;
+  outcomeId: string;
+  description: string;
+  odds: number;
+  reasoning: string;
+  prob: number;                 // de-vigged, coherence-checked leg probability (0-1)
+  safetyScore: number;          // 0-100
+  market?: unknown;             // raw SportyBet market object (ignore in UIs)
+  outcome?: unknown;            // raw SportyBet outcome object (ignore in UIs)
+}
+
+export interface QuestSpecialLeg {
+  eventId: string;
+  home: string;
+  away: string;
+  league: string;
+  minute: number;
+  homeScore: number;
+  awayScore: number;
+  odds: number;
+  description: string;
+  reasoning: string;
+  prob: number;
+  safetyScore: number;
+  analysis: QuestSpecialAnalysis;
+}
+
+export interface QuestSpecialSingleResult extends QuestSpecialLeg {
+  isMultiLeg: false;
+  mode: string;
+  code: string | null;
+  url: string | null;
+  mintError: string | null;
+  jointProb: number;            // equals prob for a single leg
+  timestamp: number;
+}
+
+export interface QuestSpecialMultiResult {
+  isMultiLeg: true;
+  legsCount: number;
+  totalOdds: number;
+  jointProb: number;            // product of leg probabilities (>= 0.45 or no slip is produced)
+  code: string | null;
+  url: string | null;
+  mode: string;
+  legs: QuestSpecialLeg[];
+  timestamp: number;
+}
+
+export interface QuestSpecialNoSafeSlip {
+  timestamp: number;
+  reasons: string[];
+  considered: number;           // matches that produced at least one safe leg
+  inWindow: number;             // matches inside the 40:00-43:00 / 80:00-86:00 window
+  rejected: Record<string, number>; // why candidate legs were filtered out
+}
+
+export interface QuestSpecialTimedOut {
+  timedOut: true;
+  timestamp: number;
+  mode: string;
+  legs: number;
+  noSafeSlip: QuestSpecialNoSafeSlip | null;
+}
+
 export interface QuestSpecialStatusResponse {
   success: boolean;
   userId: string;
   active: boolean;
+  mode: string;
+  legs: number;
   scans: number;
   runningFor: number;
   dailyUsed: number;
-  maxDaily: number;
-  lastResult: {
-    code: string | null;
-    url: string | null;
-    home: string;
-    away: string;
-    league?: string;
-    minute: number;
-    homeScore: number;
-    awayScore: number;
-    analysis: {
-      window: string;
-      type: string;
-      description: string;
-      odds: number;
-      reasoning: string;
-    };
-    timestamp: number;
-  } | null;
+  maxDaily: number | 'Unlimited';
+  isUnlimited: boolean;
+  lastResult: QuestSpecialSingleResult | QuestSpecialMultiResult | QuestSpecialTimedOut | null;
   error?: string;
 }
 
@@ -1202,11 +1195,15 @@ export async function getUserStats(userId: string): Promise<UserStatsResponse> {
 /**
  * Start a Quest Special background scanning session
  */
-export async function startQuestSpecial(userId: string, mode: 'handicap' | 'ou' | 'any' = 'any'): Promise<{ success: boolean; message?: string; error?: string }> {
+export async function startQuestSpecial(
+  userId: string,
+  mode: 'handicap' | 'ou' | 'any' = 'any',
+  legs = 1
+): Promise<{ success: boolean; message?: string; error?: string }> {
   const res = await fetch(`${API_BASE}/api/quest-special/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId, mode })
+    body: JSON.stringify({ userId, mode, legs })
   });
   return res.json();
 }
@@ -1234,8 +1231,18 @@ export async function stopQuestSpecial(userId: string): Promise<{ success: boole
 /**
  * Direct instant probe of live vFootball games (one-off scan)
  */
-export async function scanQuestSpecialLive(mode: 'handicap' | 'ou' | 'any' = 'any'): Promise<{ success: boolean; found: boolean; signal?: any; message?: string }> {
-  const res = await fetch(`${API_BASE}/api/quest-special/scan?mode=${mode}`, { cache: 'no-store' });
+export async function scanQuestSpecialLive(
+  mode: 'handicap' | 'ou' | 'any' = 'any',
+  legs = 1
+): Promise<{
+  success: boolean;
+  found: boolean;
+  signal?: QuestSpecialSingleResult | QuestSpecialMultiResult;
+  message?: string;
+  noSafeSlip?: QuestSpecialNoSafeSlip | null;
+}> {
+  // NOTE: when a safe slip is found this mints a real booking code.
+  const res = await fetch(`${API_BASE}/api/quest-special/scan?mode=${mode}&legs=${legs}`, { cache: 'no-store' });
   return res.json();
 }
 ```

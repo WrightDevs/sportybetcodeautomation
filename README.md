@@ -216,15 +216,16 @@ Quest Special is a **live vFootball sniper**. Selection is deterministic code (`
 **Pipeline**
 1. *Pool* - live events inside the firing window (HT: 40-43', FT: 80-86'), clock and score known, one leg per match, only `status 0` markets.
 2. *Probability* - the remaining-goal rate is fitted from the match's own live Over/Under ladder (markets 18/68; team split from 19/20), then each leg is priced with a Poisson model of the remaining goals given the current score. The leg's own de-vigged market price is the cross-check; the leg probability is the **lower** of the two. Nothing is hard-coded or invented; if the ladder is missing the match is skipped.
-3. *Hard filters* - `MIN_LEG_PROB`, odds band, coherence (|model - market| <= tol), straight wins only when no Double Chance survives and prob >= `MIN_WIN_PROB`.
-4. *Score 0-100* - probability (70%), coherence (15%), market-type safety (10%), league (5%).
-5. *Slip* - top `legs` legs, no shared teams, joint probability (product) must be >= `MIN_SLIP_PROB`, else **"no safe slip"** and the scan keeps going. Reserves are kept for replacement.
-6. *Veto* - multi-leg only, 2s, fail-open, may only drop a leg; a dropped leg is replaced from reserves and the bar re-checked.
-7. *Booking* - `POST /orders/share` only. No staking code path exists.
+3. *Handicap first* - Handicap + Double Chance (+0.5) legs are tier 1 and always preferred. No GG (tier 2), Under (tier 3) and straight results (tier 4) are fallbacks used only when no tier-1 leg survives, or to fill the remaining slots of a multi-leg slip, and they must clear the stricter `SEL_MIN_FALLBACK_PROB` (0.85). `SEL_PREFER_HANDICAP=off` restores pure safety-score ranking.
+4. *Hard filters* - `MIN_LEG_PROB`, odds band, coherence (|model - market| <= tol), straight wins only when no Double Chance survives and prob >= `MIN_WIN_PROB`.
+5. *Score 0-100* - probability (70%), coherence (15%), market-type safety (10%), league (5%).
+6. *Slip* - top `legs` legs, no shared teams, joint probability (product) must be >= `MIN_SLIP_PROB`, else **"no safe slip"** and the scan keeps going. Reserves are kept for replacement.
+7. *Veto* - multi-leg only, 2s, fail-open, may only drop a leg; a dropped leg is replaced from reserves and the bar re-checked.
+8. *Booking* - `POST /orders/share` only. No staking code path exists.
 
 **Time window.** `MARKET_WINDOW = { HT: 40, FT: 80 }` (`src/selection/config.js`) is the *effective playing time*. The firing window is centred on it, and the scoring exposure of the remaining time is multiplied by END/W (45/40 for HT, 90/80 for FT), so the model deliberately assumes more risk than the raw clock. Set `SEL_TIME_SCALING=off` for the raw clock, or change `SEL_WINDOW_HT/FT`.
 
-**Config** (env, defaults): `SEL_MIN_LEG_PROB` 0.78, `SEL_MIN_LEG_ODDS` 1.10, `SEL_MAX_LEG_ODDS` 1.35, `SEL_MIN_SLIP_PROB` 0.45, `SEL_COHERENCE_TOL` 0.10, `SEL_MIN_WIN_PROB` 0.85, `SEL_WINDOW_HT` 40, `SEL_WINDOW_FT` 80, `SEL_TIME_SCALING` on, `SEL_VETO_TIMEOUT_MS` 2000.
+**Config** (env, defaults): `SEL_MIN_LEG_PROB` 0.78, `SEL_MIN_LEG_ODDS` 1.10, `SEL_MAX_LEG_ODDS` 1.35, `SEL_MIN_SLIP_PROB` 0.45, `SEL_COHERENCE_TOL` 0.10, `SEL_MIN_WIN_PROB` 0.85, `SEL_MIN_FALLBACK_PROB` 0.85, `SEL_PREFER_HANDICAP` on, `SEL_WINDOW_HT` 40, `SEL_WINDOW_FT` 80, `SEL_TIME_SCALING` on, `SEL_VETO_TIMEOUT_MS` 2000.
 
 Note: a 5-leg slip needs an average leg probability of about 0.85 to clear `MIN_SLIP_PROB` 0.45 (0.78^5 = 0.29), so 5-leg requests will often return "no safe slip". That is intended.
 

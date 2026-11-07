@@ -40,6 +40,20 @@ const SELECTION = {
 
   LLM_VETO_TIMEOUT_MS: num('SEL_VETO_TIMEOUT_MS', 2000),
 
+  // HANDICAP-FIRST: tier 1 (handicap + Double Chance +0.5) is always preferred; No GG / Under /
+  // straight results are fallbacks used only when no tier-1 leg survives (or to fill remaining
+  // multi-leg slots), and must clear the stricter MIN_FALLBACK_PROB. SEL_PREFER_HANDICAP=off
+  // restores pure safety-score ranking.
+  PREFER_HANDICAP: (process.env.SEL_PREFER_HANDICAP || 'on') !== 'off',
+  MIN_FALLBACK_PROB: num('SEL_MIN_FALLBACK_PROB', 0.85),
+  TIER: {
+    ft_handicap: 1, ht_handicap: 1, ft_double_chance: 1, ht_double_chance: 1,
+    ft_nogg: 2, ht_nogg: 2,
+    ft_under: 3, ht_under: 3,
+    h1_winner: 4, match_winner_2lead: 4, h1_draw: 4, match_draw: 4
+  },
+  TIER_FAMILY: { 1: 'handicap', 2: 'nogg', 3: 'under', 4: 'result' },
+
   // Higher = safer market type (used in the 0-100 safety score)
   TYPE_SAFETY: {
     ft_double_chance: 1.0, ht_double_chance: 1.0,

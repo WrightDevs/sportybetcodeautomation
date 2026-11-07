@@ -16,7 +16,7 @@ function logSlip({ code, mode, legs, jointProb, totalOdds }, filePath = file()) 
       eventId: l.eventId, home: l.home, away: l.away, league: l.league,
       stage: l.stage, minute: l.minute, scoreH: l.scoreH, scoreA: l.scoreA,
       marketId: l.marketId, specifier: l.specifier || '', outcomeId: l.outcomeId,
-      type: l.type, line: l.line ?? null, odds: l.odds,
+      type: l.type, tier: l.tier ?? null, family: l.family || null, line: l.line ?? null, odds: l.odds,
       prob: l.prob, probModel: l.probModel, probMarket: l.probMarket, score: l.score,
       result: null
     }));

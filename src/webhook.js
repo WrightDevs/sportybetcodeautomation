@@ -15,6 +15,7 @@ const {
   stopSession: stopQuestSpecialSession,
   getStatus: getQuestSpecialStatus,
   getDailyCount: getQuestSpecialDailyCount,
+  getLastNoSafe,
   MAX_DAILY: QUEST_SPECIAL_MAX_DAILY
 } = require('./quest-special');
 
@@ -239,7 +240,7 @@ function startWebhookServer(onPaymentActivated) {
           { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures, ~10 odds accumulators' },
           { id: 'efootball', name: 'eFootball', icon: '🕹', desc: 'In-play matches with 3+ margin after 40′' },
           { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' },
-          { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live background sniper: vFootball (41′ HT Under, 43′ H1 Result, 85′ FT Under, 88′ Late Lead/Hcap)' }
+          { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live vFootball sniper: handicap-first safe selection at 40′ (half-time) and 80′ (full-time); Under / No GG only as a stricter fallback' }
         ]
       }));
     }
@@ -448,7 +449,8 @@ function startWebhookServer(onPaymentActivated) {
               found: false,
               mode,
               legs,
-              message: `No live vFootball game currently meets the ${mode} criteria.`
+              message: `No safe slip right now for the ${mode} criteria.`,
+              noSafeSlip: getLastNoSafe('community')
             }));
           }
           return res.end(JSON.stringify({

@@ -9,6 +9,12 @@ const M = require('./model');
 
 const clamp01 = x => Math.max(0, Math.min(1, x));
 
+// Handicap-first ordering: lower tier first (when PREFER_HANDICAP), then safety score, then probability.
+function tierOf(typeName, cfg) { return cfg.TIER[typeName] ?? 5; }
+function byPreference(cfg) {
+  return (a, b) => (cfg.PREFER_HANDICAP ? a.tier - b.tier : 0) || b.score - a.score || b.prob - a.prob || a.odds - b.odds;
+}
+
 function typeKey(c) {
   const t = c.type || c.window || '';
   if (/_under$/.test(t)) {
@@ -44,7 +50,13 @@ function evaluateCandidate(c, ctx, cfg) {
   const p = Math.min(mp.p, pMarket); // conservative: the lower of model and de-vigged market
   if (p < cfg.MIN_LEG_PROB) return { rejected: `prob ${p.toFixed(2)}<MIN_LEG_PROB` };
 
+  const tier = tierOf(c.type, cfg);
+  if (tier >= 2 && p < cfg.MIN_FALLBACK_PROB) {
+    return { rejected: `fallback prob ${p.toFixed(2)}<MIN_FALLBACK_PROB` };
+  }
+
   const leg = {
+    tier, family: cfg.TIER_FAMILY[tier] || 'other',
     id: ev.eventId, eventId: ev.eventId,
     home: ev.homeTeamName, away: ev.awayTeamName, league: ev.league || '',
     marketId: c.marketId, specifier: c.specifier || '', outcomeId: c.outcomeId,
@@ -87,7 +99,7 @@ function rankEventLegs(item, cfg, deps, isVirtual) {
     if (hasDC) { rejects.push({ eventId: ev.eventId, market: `${l.marketId}/${l.outcomeId}`, reason: 'safer Double Chance available' }); return false; }
     return true;
   });
-  kept.sort((a, b) => b.score - a.score || b.prob - a.prob || a.odds - b.odds);
+  kept.sort(byPreference(cfg));
   return { legs: kept, rejects };
 }
 
@@ -133,7 +145,7 @@ function selectSlip(events, opts = {}, deps = {}, cfg = SELECTION) {
       best.push(r.legs[0]);
     }
   }
-  best.sort((a, b) => b.score - a.score || b.prob - a.prob);
+  best.sort(byPreference(cfg));
   const slip = buildSlip(best, legsNeeded, cfg);
   return { ...slip, legsNeeded, candidatesConsidered: best.length, rejects };
 }
@@ -146,7 +158,7 @@ function applyVeto(selection, verdicts, cfg = SELECTION) {
   const dropped = selection.legs.filter(l => drop.has(String(l.eventId)));
   const pool = [...selection.legs.filter(l => !drop.has(String(l.eventId))),
     ...selection.reserves.filter(l => !drop.has(String(l.eventId)))];
-  pool.sort((a, b) => b.score - a.score || b.prob - a.prob);
+  pool.sort(byPreference(cfg));
   const rebuilt = buildSlip(pool, selection.legsNeeded, cfg);
   return { ...rebuilt, legsNeeded: selection.legsNeeded, rejects: selection.rejects || [], dropped };
 }

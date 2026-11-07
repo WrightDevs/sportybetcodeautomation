@@ -34,6 +34,7 @@ function mkEv(id, home, away, { h = 0, a = 0, lam = 0.16, lamH = 0.1, lamA = 0.0
 const item = (ev, minute, score, stage = 'FT') => ({ ev, minute, score, stage });
 const underOnly = (ev, min, sc, stage) => Q.checkUnderCandidates(ev, min, sc, stage === 'HT');
 const deps = { getMarkets: Q.getMarkets, generateCandidates: underOnly };
+const U = { ...SELECTION, MIN_FALLBACK_PROB: 0.78 }; // mechanics tests use Under legs
 
 // ── de-vig ──
 test('devig normalises to 1 and removes margin', () => {
@@ -89,7 +90,7 @@ test('leg predicates / ids', () => {
 // ── hard filters ──
 test('filter: accepts a safe Under with coherent model/market', () => {
   const ev = mkEv('e1', 'A', 'B', { h: 1, a: 0 });
-  const sel = S.selectSlip([item(ev, 80, { h: 1, a: 0 })], { legs: 1 }, deps);
+  const sel = S.selectSlip([item(ev, 80, { h: 1, a: 0 })], { legs: 1 }, deps, U);
   assert.equal(sel.ok, true, JSON.stringify(sel.rejects));
   assert.ok(sel.legs[0].prob >= SELECTION.MIN_LEG_PROB);
   assert.ok(sel.legs[0].odds >= SELECTION.MIN_LEG_ODDS);
@@ -165,7 +166,7 @@ function safeEvents(n, prefix = 'T') {
     item(mkEv(`ev${i}`, `${prefix}H${i}`, `${prefix}A${i}`, { h: 1, a: 0, lam: 0.14 + i * 0.004, lamH: 0.09, lamA: 0.05 }), 80, { h: 1, a: 0 }));
 }
 test('slip: builds the requested number of legs, ranked by score, product probability', () => {
-  const sel = S.selectSlip(safeEvents(4), { legs: 3 }, deps, { ...SELECTION, MIN_SLIP_PROB: 0.3 });
+  const sel = S.selectSlip(safeEvents(4), { legs: 3 }, deps, { ...U, MIN_SLIP_PROB: 0.3 });
   assert.equal(sel.ok, true, JSON.stringify(sel.reasons));
   assert.equal(sel.legs.length, 3);
   const prod = sel.legs.reduce((a, l) => a * l.prob, 1);
@@ -181,12 +182,12 @@ test('slip: one leg per match', () => {
 test('slip: correlated legs (shared team) are avoided', () => {
   const a = item(mkEv('a', 'SAME', 'X1', { h: 1, a: 0 }), 80, { h: 1, a: 0 });
   const b = item(mkEv('b', 'SAME', 'X2', { h: 1, a: 0 }), 80, { h: 1, a: 0 });
-  const sel = S.selectSlip([a, b], { legs: 2 }, deps, { ...SELECTION, MIN_SLIP_PROB: 0.1 });
+  const sel = S.selectSlip([a, b], { legs: 2 }, deps, { ...U, MIN_SLIP_PROB: 0.1 });
   assert.equal(sel.ok, false);
   assert.equal(sel.legs.length, 1);
 });
 test('slip: "no safe slip" when joint probability is below MIN_SLIP_PROB (bar is not lowered)', () => {
-  const sel = S.selectSlip(safeEvents(5), { legs: 5 }, deps, { ...SELECTION, MIN_SLIP_PROB: 0.999 });
+  const sel = S.selectSlip(safeEvents(5), { legs: 5 }, deps, { ...U, MIN_SLIP_PROB: 0.999 });
   assert.equal(sel.ok, false);
   assert.equal(sel.reason, 'no safe slip');
   assert.match(sel.reasons[0], /joint probability/);
@@ -198,7 +199,7 @@ test('slip: "no safe slip" when too few legs pass', () => {
   assert.match(sel.reasons[0], /only 2\/5/);
 });
 test('reserve replacement: dropped leg is replaced from reserves and bar re-checked', () => {
-  const cfg = { ...SELECTION, MIN_SLIP_PROB: 0.3 };
+  const cfg = { ...U, MIN_SLIP_PROB: 0.3 };
   const sel = S.selectSlip(safeEvents(4), { legs: 2 }, deps, cfg);
   assert.equal(sel.ok, true);
   const dropId = sel.legs[0].eventId;
@@ -289,4 +290,62 @@ test('no-stake: only /orders/share booking is used; no stake/wager fields anywhe
   const posts = src.match(/method:\s*'POST'/g) || [];
   assert.ok(posts.length <= 2); // booking POST + LLM chat POST
   assert.ok(/orders\/share/.test(files[0]));
+});
+
+// ── handicap-first tiers ──
+function hcapCand(ev, p = 0.8) {
+  // 3-way handicap market priced so the home outcome de-vigs to exactly p
+  const rest = (1 - p) / 2;
+  const market = { id: '14', status: 0, specifier: 'hcp=1:0', outcomes: [
+    { id: '1711', odds: 1 / p, isActive: 1 }, { id: '1712', odds: 1 / rest, isActive: 1 }, { id: '1713', odds: 1 / rest, isActive: 1 }] };
+  return { marketId: '14', specifier: 'hcp=1:0', outcomeId: '1711', odds: Number((1 / p).toFixed(3)), type: 'ft_handicap', market };
+}
+const tierCfg = { ...SELECTION, COHERENCE_TOL: 1, MIN_LEG_ODDS: 1.0, MAX_LEG_ODDS: 99, MIN_FALLBACK_PROB: 0.78, MIN_SLIP_PROB: 0.1 };
+const both = (ev, mn, sc, st) => [...Q.checkUnderCandidates(ev, mn, sc, st === 'HT'), hcapCand(ev)];
+const mk = (id, h, a) => item(mkEv(id, `${id}H`, `${id}A`, { h: 1, a: 0 }), 80, { h: 1, a: 0 });
+
+test('tiers: handicap is preferred over a higher-scoring Under; PREFER_HANDICAP=off restores score order', () => {
+  const gen = { getMarkets: Q.getMarkets, generateCandidates: both };
+  const r = S.rankEventLegs(mk('t1'), tierCfg, gen, true);
+  const under = r.legs.find(l => l.family === 'under'), hc = r.legs.find(l => l.family === 'handicap');
+  assert.ok(under && hc, JSON.stringify(r.rejects));
+  assert.ok(under.score > hc.score, 'precondition: Under outscores the handicap leg');
+  assert.equal(r.legs[0].family, 'handicap');
+  const off = S.rankEventLegs(mk('t1'), { ...tierCfg, PREFER_HANDICAP: false }, gen, true);
+  assert.equal(off.legs[0].family, 'under');
+  const sel = S.selectSlip([mk('t1')], { legs: 1 }, gen, tierCfg);
+  assert.equal(sel.legs[0].family, 'handicap');
+  assert.equal(sel.legs[0].tier, 1);
+});
+test('tiers: Under is used only when no handicap leg survives', () => {
+  const gen = { getMarkets: Q.getMarkets, generateCandidates: underOnly };
+  const sel = S.selectSlip([mk('t2')], { legs: 1 }, gen, tierCfg);
+  assert.equal(sel.ok, true);
+  assert.equal(sel.legs[0].family, 'under');
+});
+test('tiers: fallback needs MIN_FALLBACK_PROB (0.85) while handicap needs only MIN_LEG_PROB (0.78)', () => {
+  const strict = { ...tierCfg, MIN_FALLBACK_PROB: 0.85 };
+  const u = S.rankEventLegs(mk('t3'), strict, { getMarkets: Q.getMarkets, generateCandidates: underOnly }, true);
+  assert.equal(u.legs.length, 0);
+  assert.ok(u.rejects.some(x => /MIN_FALLBACK_PROB/.test(x.reason)));
+  const h = S.rankEventLegs(mk('t3'), strict, { getMarkets: Q.getMarkets, generateCandidates: (e) => [hcapCand(e, 0.8)] }, true);
+  assert.equal(h.legs.length, 1);
+  assert.equal(h.legs[0].family, 'handicap');
+});
+test('tiers: 5-leg slip fills with handicap first, then fallback; joint bar still applies', () => {
+  const evs = ['a', 'b', 'c', 'd', 'e'].map(id => mk('m' + id));
+  // first three matches offer a handicap leg too; the last two only Under
+  const gen = { getMarkets: Q.getMarkets,
+    generateCandidates: (ev, mn, sc, st) => /^m[abc]$/.test(ev.eventId) ? both(ev, mn, sc, st) : underOnly(ev, mn, sc, st) };
+  const sel = S.selectSlip(evs, { legs: 5 }, gen, tierCfg);
+  assert.equal(sel.ok, true, JSON.stringify(sel.reasons));
+  assert.deepEqual(sel.legs.map(l => l.family), ['handicap', 'handicap', 'handicap', 'under', 'under']);
+  const tight = S.selectSlip(evs, { legs: 5 }, gen, { ...tierCfg, MIN_SLIP_PROB: 0.99 });
+  assert.equal(tight.ok, false);
+  assert.equal(tight.reason, 'no safe slip');
+});
+test('tiers: tier is logged and exposed on legs', () => {
+  const sel = S.selectSlip([mk('t5')], { legs: 1 }, { getMarkets: Q.getMarkets, generateCandidates: both }, tierCfg);
+  assert.equal(typeof sel.legs[0].tier, 'number');
+  assert.equal(sel.legs[0].family, 'handicap');
 });

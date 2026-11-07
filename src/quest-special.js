@@ -10,7 +10,7 @@ const { vetoLegs } = require('./selection/veto');
 const { logSlip } = require('./selection/log');
 
 const WINDOW_SPAN = SELECTION.WINDOW_SPAN;
-let lastNoSafe = null; // most recent "no safe slip" explanation (for status/timeouts)
+const noSafeBy = new Map(); // userId -> latest "no safe slip" explanation (timeouts / scan responses)
 
 // ── Configuration & Headers ────────────────────────────
 const CC = (CFG.REGION || 'ng').toLowerCase();
@@ -658,7 +658,18 @@ async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs =
   }
 
   if (!selection.ok) {
-    lastNoSafe = { timestamp: Date.now(), reasons: selection.reasons || [], considered: selection.candidatesConsidered || 0 };
+    const rejected = {};
+    for (const r of selection.rejects || []) {
+      const k = String(r.reason).replace(/\(.*/, '').replace(/[\d.]+/g, '#').trim();
+      rejected[k] = (rejected[k] || 0) + 1;
+    }
+    noSafeBy.set(String(userId || 'community'), {
+      timestamp: Date.now(),
+      reasons: selection.reasons || [],
+      considered: selection.candidatesConsidered || 0,
+      inWindow: pool.length,
+      rejected
+    });
     return null; // "no safe slip" - keep scanning, never lower the bar
   }
 
@@ -667,6 +678,7 @@ async function scanQuestSpecial(userId = 'community', mode = 'any', targetLegs =
     id: l.eventId, marketId: l.marketId, specifier: l.specifier, outcomeId: l.outcomeId
   })));
   if (!booking || !booking.code) return null;
+  noSafeBy.delete(String(userId || 'community'));
 
   for (const l of chosen) fired.set(`${l.eventId}:${l.marketId}:${l.specifier || 'none'}:${l.outcomeId}`, Date.now());
   logSlip({ code: booking.code, mode: normalizedMode, legs: chosen, jointProb: selection.jointProb, totalOdds: selection.totalOdds });
@@ -753,7 +765,7 @@ function startSession(chatId, optionsOrMode, onDone) {
       session.active = false;
       clearInterval(timer);
       activeSessions.delete(id);
-      lastResults.set(id, { timedOut: true, timestamp: Date.now(), mode, legs });
+      lastResults.set(id, { timedOut: true, timestamp: Date.now(), mode, legs, noSafeSlip: noSafeBy.get(id) || null });
       if (callback) callback(null, true);
       return;
     }
@@ -842,7 +854,7 @@ module.exports = {
   getDailyCount,
   incrementDailyCount,
   isUnlimitedUser,
-  getLastNoSafe: () => lastNoSafe,
+  getLastNoSafe: (userId) => noSafeBy.get(String(userId || 'community')) || null,
   stageOf,
   getMarkets,
   getCandidatesForEvent,
