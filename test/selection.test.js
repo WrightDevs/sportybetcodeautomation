@@ -349,3 +349,47 @@ test('tiers: tier is logged and exposed on legs', () => {
   assert.equal(typeof sel.legs[0].tier, 'number');
   assert.equal(sel.legs[0].family, 'handicap');
 });
+
+// ── preferred handicap line: +3 before +2 (then the next best) ──
+function hline(spec, p, oid = '1711') {
+  const rest = (1 - p) / 2;
+  const market = { id: '14', status: 0, specifier: spec, outcomes: [
+    { id: '1711', odds: 1 / (oid === '1711' ? p : rest), isActive: 1 },
+    { id: '1712', odds: 1 / rest, isActive: 1 },
+    { id: '1713', odds: 1 / (oid === '1713' ? p : rest), isActive: 1 }] };
+  const o = market.outcomes.find(x => x.id === oid);
+  return { marketId: '14', specifier: spec, outcomeId: oid, odds: Number(o.odds.toFixed(3)), type: 'ft_handicap', market };
+}
+const genLines = (...cands) => ({ getMarkets: Q.getMarkets, generateCandidates: () => cands });
+
+test('handicap line: +3 is preferred over +2 even when +2 scores higher', () => {
+  const gen = genLines(hline('hcp=2:0', 0.93), hline('hcp=3:0', 0.82));
+  const r = S.rankEventLegs(mk('h1'), tierCfg, gen, true);
+  assert.equal(r.legs.length, 2);
+  const two = r.legs.find(l => l.hcpLine === 2), three = r.legs.find(l => l.hcpLine === 3);
+  assert.ok(two.score > three.score, 'precondition: +2 outscores +3');
+  assert.equal(r.legs[0].hcpLine, 3);
+  assert.equal(S.selectSlip([mk('h1')], { legs: 1 }, gen, tierCfg).legs[0].hcpLine, 3);
+});
+test('handicap line: falls back to +2 when +3 is not offered or fails the probability bar', () => {
+  const noThree = S.rankEventLegs(mk('h2'), tierCfg, genLines(hline('hcp=2:0', 0.9), hline('hcp=1:0', 0.95)), true);
+  assert.equal(noThree.legs[0].hcpLine, 2);
+  const weakThree = S.rankEventLegs(mk('h2'), tierCfg, genLines(hline('hcp=2:0', 0.9), hline('hcp=3:0', 0.6)), true);
+  assert.equal(weakThree.legs[0].hcpLine, 2); // +3 below MIN_LEG_PROB is never forced
+});
+test('handicap line: order is 3, 4, 5, 2, 1 and Double Chance (+0.5) ranks last; away side uses the second number', () => {
+  const dc = { marketId: '10', specifier: '', outcomeId: '9', odds: 1.1, type: 'ft_double_chance',
+    market: { id: '10', status: 0, outcomes: [{ id: '9', odds: 1.1, isActive: 1 }, { id: '10', odds: 3, isActive: 1 }, { id: '11', odds: 20, isActive: 1 }] } };
+  const cands = [dc, hline('hcp=1:0', 0.9), hline('hcp=2:0', 0.9), hline('hcp=0:4', 0.9, '1713'), hline('hcp=0:3', 0.9, '1713')];
+  const r = S.rankEventLegs(mk('h3'), { ...tierCfg, COHERENCE_TOL: 1 }, genLines(...cands), true);
+  const lines = r.legs.filter(l => l.tier === 1).map(l => l.hcpLine);
+  assert.deepEqual(lines.slice(0, 4), [3, 4, 2, 1]);
+  assert.equal(lines[lines.length - 1], 0.5);
+});
+test('handicap line: SEL_HCP_LINE_ORDER is configurable and non-handicap legs are unaffected', () => {
+  const cfg = { ...tierCfg, HCP_LINE_ORDER: [2, 3] };
+  const r = S.rankEventLegs(mk('h4'), cfg, genLines(hline('hcp=3:0', 0.9), hline('hcp=2:0', 0.9)), true);
+  assert.equal(r.legs[0].hcpLine, 2);
+  const u = S.rankEventLegs(mk('h4'), tierCfg, { getMarkets: Q.getMarkets, generateCandidates: underOnly }, true);
+  assert.equal(u.legs[0].hcpLine, null);
+});

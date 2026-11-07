@@ -53,6 +53,10 @@ const SELECTION = {
     h1_winner: 4, match_winner_2lead: 4, h1_draw: 4, match_draw: 4
   },
   TIER_FAMILY: { 1: 'handicap', 2: 'nogg', 3: 'under', 4: 'result' },
+  // Preferred handicap LINE (head start given to the backed team, e.g. hcp=3:0 backing Home = +3), best first.
+  // +3 is preferred over +2; if +3 is unavailable the next entries are tried. Lines not listed rank after the
+  // list; Double Chance (+0.5) ranks last inside the handicap family. Probability bars still apply to every line.
+  HCP_LINE_ORDER: (process.env.SEL_HCP_LINE_ORDER || '3,4,5,2,1').split(',').map(s => Number(s.trim())).filter(Number.isFinite),
 
   // Higher = safer market type (used in the 0-100 safety score)
   TYPE_SAFETY: {

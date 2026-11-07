@@ -11,8 +11,30 @@ const clamp01 = x => Math.max(0, Math.min(1, x));
 
 // Handicap-first ordering: lower tier first (when PREFER_HANDICAP), then safety score, then probability.
 function tierOf(typeName, cfg) { return cfg.TIER[typeName] ?? 5; }
+// Head start (in goals) the backed team receives: hcp=3:0 backing Home (1711) = 3; hcp=0:3 backing Away (1713) = 3.
+// Double Chance counts as 0.5. Returns null for non-handicap legs.
+function hcpLineOf(c) {
+  const mid = String(c.marketId), oid = String(c.outcomeId);
+  if (mid === '14' || mid === '65') {
+    const m = /^hcp=(\d+):(\d+)$/.exec(c.specifier || '');
+    if (!m) return null;
+    return oid === '1711' ? Number(m[1]) : oid === '1713' ? Number(m[2]) : null;
+  }
+  if ((mid === '10' || mid === '63') && /double_chance/.test(c.type || '')) return 0.5;
+  return null;
+}
+// Lower rank = preferred. Listed lines in the configured order, other lines next, Double Chance last.
+function hcpRankOf(line, cfg) {
+  if (line == null) return 99;
+  const order = cfg.HCP_LINE_ORDER || [];
+  const i = order.indexOf(line);
+  if (i >= 0) return i;
+  return line === 0.5 ? order.length + 1 : order.length;
+}
 function byPreference(cfg) {
-  return (a, b) => (cfg.PREFER_HANDICAP ? a.tier - b.tier : 0) || b.score - a.score || b.prob - a.prob || a.odds - b.odds;
+  return (a, b) => (cfg.PREFER_HANDICAP ? a.tier - b.tier : 0)
+    || (cfg.PREFER_HANDICAP && a.tier === 1 && b.tier === 1 ? (a.hcpRank ?? 99) - (b.hcpRank ?? 99) : 0)
+    || b.score - a.score || b.prob - a.prob || a.odds - b.odds;
 }
 
 function typeKey(c) {
@@ -55,8 +77,10 @@ function evaluateCandidate(c, ctx, cfg) {
     return { rejected: `fallback prob ${p.toFixed(2)}<MIN_FALLBACK_PROB` };
   }
 
+  const hcpLine = hcpLineOf(c);
   const leg = {
     tier, family: cfg.TIER_FAMILY[tier] || 'other',
+    hcpLine, hcpRank: hcpRankOf(hcpLine, cfg),
     id: ev.eventId, eventId: ev.eventId,
     home: ev.homeTeamName, away: ev.awayTeamName, league: ev.league || '',
     marketId: c.marketId, specifier: c.specifier || '', outcomeId: c.outcomeId,

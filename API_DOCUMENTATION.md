@@ -470,6 +470,8 @@ Returns metadata for all available sports to populate UI tabs and buttons.
 | **LLM veto** | Multi-leg only, 2 s budget, fail-open. May only drop a leg (replaced from reserves); never adds legs or changes numbers. |
 | **Booking** | `POST /orders/share` only. There is no staking code path. |
 
+Handicap line preference: among handicap legs the selector prefers the **+3** line (a 3-goal head start for the backed team) over +2, then falls back in the order +4, +5, +2, +1 and finally Double Chance (+0.5). A preferred line is skipped when it is not offered or does not meet the probability bar. No API fields changed (legs may now include `hcpLine`/`hcpRank` internally; ignore them). Configurable with `SEL_HCP_LINE_ORDER`.
+
 All thresholds are configurable by environment variable (`SEL_MIN_LEG_PROB`, `SEL_MIN_FALLBACK_PROB`, `SEL_MIN_SLIP_PROB`, `SEL_WINDOW_HT`, `SEL_WINDOW_FT`, `SEL_PREFER_HANDICAP`, …; see `.env.example`).
 
 > **5-leg slips:** five legs at ~0.80 give ~0.33 joint probability, below the 0.45 bar, so 5-leg requests frequently end with *no safe slip*. That is intentional.

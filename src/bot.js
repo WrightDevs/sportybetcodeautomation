@@ -259,6 +259,7 @@ async function handleQuestSpecial(chat, forcedOptions = null) {
       inline_keyboard: [
         [
           { text: '1-Game Mix', callback_data: 'qs_1_any' },
+          { text: '3-Games Mix', callback_data: 'qs_3_any' },
           { text: '5-Games Mix', callback_data: 'qs_5_any' }
         ],
         [
@@ -295,7 +296,7 @@ async function launchQuestSpecialSession(chat, options = { mode: 'mix', legs: 1 
 
   startQuestSpecial(chat, { mode, legs }, async (result, timedOut) => {
     if (timedOut) {
-      const retryCallback = legs > 1 ? 'qs_5_any' : 'qs_1_any';
+      const retryCallback = `qs_${[1, 3, 5].includes(legs) ? legs : (legs > 1 ? 5 : 1)}_any`;
       return send(chat, `<b>Quest Special (${formatLabel})</b>\nNo match met criteria during this round.`, {
         reply_markup: {
           inline_keyboard: [
@@ -330,7 +331,7 @@ async function launchQuestSpecialSession(chat, options = { mode: 'mix', legs: 1 
           buttons.push([{ text: `Open ${result.code || 'Slip'} in SportyBet`, url: result.url }]);
         }
         buttons.push(
-          [{ text: 'Scan Next', callback_data: 'qs_5_any' }],
+          [{ text: 'Scan Next', callback_data: `qs_${[3, 5].includes(legs) ? legs : 5}_any` }],
           [{ text: 'Stats & History', callback_data: 'my_stats' }],
           [{ text: 'Main Menu', callback_data: 'menu' }]
         );
@@ -594,6 +595,8 @@ async function poll() {
             await launchQuestSpecialSession(chat, { mode: 'ou', legs: 1 });
           } else if (data === 'qs_1_any' || data === 'qs_mode_any') {
             await launchQuestSpecialSession(chat, { mode: 'any', legs: 1 });
+          } else if (data === 'qs_3_any') {
+            await launchQuestSpecialSession(chat, { mode: 'any', legs: 3 });
           } else if (data === 'qs_5_handicap') {
             await launchQuestSpecialSession(chat, { mode: 'handicap', legs: 5 });
           } else if (data === 'qs_5_ou') {
@@ -691,20 +694,20 @@ async function poll() {
           let legs = 1;
           let mode = 'any';
 
-          if (arg1 === '5' || arg1 === 'combo' || arg1 === 'accumulator' || arg1 === 'acc') {
-            legs = 5;
+          if (arg1 === '3' || arg1 === '5' || arg1 === 'combo' || arg1 === 'accumulator' || arg1 === 'acc') {
+            legs = arg1 === '3' ? 3 : 5;
             if (arg2 === 'handicap' || arg2 === 'hcap') mode = 'handicap';
             else if (arg2 === 'ou' || arg2 === 'under' || arg2 === 'o/u') mode = 'ou';
             else mode = 'any';
             await launchQuestSpecialSession(chat, { mode, legs });
           } else if (arg1 === 'handicap' || arg1 === 'hcap') {
-            if (arg2 === '5') legs = 5;
+            if (arg2 === '3' || arg2 === '5') legs = Number(arg2);
             await launchQuestSpecialSession(chat, { mode: 'handicap', legs });
           } else if (arg1 === 'ou' || arg1 === 'under' || arg1 === 'o/u') {
-            if (arg2 === '5') legs = 5;
+            if (arg2 === '3' || arg2 === '5') legs = Number(arg2);
             await launchQuestSpecialSession(chat, { mode: 'ou', legs });
           } else if (arg1 === 'any' || arg1 === 'all' || arg1 === 'mixed') {
-            if (arg2 === '5') legs = 5;
+            if (arg2 === '3' || arg2 === '5') legs = Number(arg2);
             await launchQuestSpecialSession(chat, { mode: 'any', legs });
           } else {
             await handleQuestSpecial(chat);
