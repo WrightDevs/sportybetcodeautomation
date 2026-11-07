@@ -124,11 +124,13 @@ function evaluateEvent(ev, cfg = FOOTBALL) {
   const fit = fitEvent(ev);
   if (fit.reject) return { legs: [], rejects: [{ eventId: ev.eventId, reason: fit.reject }] };
 
+  // Global ceiling = the widest per-tier ceiling; each tier filters again in poolFor.
+  const oddsCeiling = Math.max(cfg.MAX_ODDS, ...Object.values(cfg.TIERS).map(t => t.maxLegOdds || 0));
   const legs = [];
   for (const c of candidatesOf(ev)) {
     const tag = `${c.marketId}/${c.outcomeId}${c.specifier ? ' ' + c.specifier : ''}`;
     if (c.odds < cfg.MIN_ODDS) { rej(tag, 'odds<MIN'); continue; }
-    if (c.odds > cfg.MAX_ODDS) { rej(tag, 'odds>MAX'); continue; }
+    if (c.odds > oddsCeiling) { rej(tag, 'odds>MAX'); continue; }
     const pred = M.legPredicate(c);
     if (!pred) { rej(tag, 'unmodelled market'); continue; }
     const pModel = M.probWhere(fit.rates, pred);
@@ -160,23 +162,33 @@ function evaluateEvent(ev, cfg = FOOTBALL) {
 const teamsOf = l => [String(l.home).toLowerCase(), String(l.away).toLowerCase()];
 
 // events: [{ legs:[...ranked] }] -> one best-eligible leg per match for this tier, tier-first, then score.
+// Odds earned per unit of risk: ln(odds) / -ln(prob). Higher = more payout for the same chance of losing.
+const valueRatio = l => Math.log(l.odds) / Math.max(1e-9, -Math.log(Math.min(0.9999, l.prob)));
+
 function poolFor(perEvent, tierCfg, cfg) {
+  const ceiling = tierCfg.maxLegOdds || cfg.MAX_ODDS;
+  const target = !!tierCfg.targetOdds;
   const pool = [];
   for (const legs of perEvent) {
-    const l = legs.find(x => tierCfg.families.includes(x.family) && x.prob >= tierCfg.minLegProb);
-    if (l) pool.push(l);
+    const ok = legs.filter(x => tierCfg.families.includes(x.family) && x.prob >= tierCfg.minLegProb && x.odds <= ceiling);
+    if (!ok.length) continue;
+    // Fixed-size tiers take the safest leg of the match; target-odds tiers take the best odds-per-risk leg.
+    pool.push(target ? ok.reduce((b, x) => (valueRatio(x) > valueRatio(b) ? x : b)) : ok[0]);
   }
-  pool.sort((a, b) => a.tier - b.tier || b.score - a.score || a.odds - b.odds);
+  if (target) pool.sort((a, b) => valueRatio(b) - valueRatio(a) || b.score - a.score);
+  else pool.sort((a, b) => a.tier - b.tier || b.score - a.score || a.odds - b.odds);
   return pool;
 }
 
-function pick(pool, n, cfg, stopAtOdds) {
+function pick(pool, n, cfg, stopAtOdds, leagueCap) {
   const picked = [], teams = new Set(), perLeague = {};
+  const cap = leagueCap || cfg.LEAGUE_CAP;
+  const maxLegs = Math.min(n || cfg.MAX_LEGS, cfg.MAX_LEGS);
   let odds = 1;
   for (const l of pool) {
-    if (n && picked.length >= n) break;
+    if (picked.length >= maxLegs) break;
     if (stopAtOdds && odds >= stopAtOdds) break;
-    if ((perLeague[l.league] || 0) >= cfg.LEAGUE_CAP) continue;
+    if ((perLeague[l.league] || 0) >= cap) continue;
     const t = teamsOf(l);
     if (t.some(x => teams.has(x))) continue;
     picked.push(l); t.forEach(x => teams.add(x));
@@ -195,15 +207,15 @@ const summarize = picked => ({
 function buildTierSlip(name, perEvent, cfg = FOOTBALL) {
   const t = cfg.TIERS[name];
   const pool = poolFor(perEvent, t, cfg);
-  if (name === 'long') {
-    const picked = pick(pool, 0, cfg, t.targetOdds);
+  if (t.targetOdds) {
+    const picked = pick(pool, 0, cfg, t.targetOdds, t.leagueCap);
     const s = summarize(picked);
     if (!picked.length || s.totalOdds < t.targetOdds) {
-      return { tier: name, ok: false, reason: 'no safe slip', ...s, reasons: [`only reached @${s.totalOdds} of @${t.targetOdds} with ${picked.length} legs`], poolSize: pool.length };
+      return { tier: name, ok: false, reason: 'no safe slip', ...s, reasons: [`only reached @${s.totalOdds} of @${t.targetOdds} with ${picked.length} legs (max ${cfg.MAX_LEGS})`], poolSize: pool.length };
     }
-    return { tier: name, ok: true, highRisk: true, ...s, poolSize: pool.length };
+    return { tier: name, ok: true, highRisk: !!t.highRisk, ...s, poolSize: pool.length };
   }
-  const picked = pick(pool, t.legs, cfg);
+  const picked = pick(pool, t.legs, cfg, 0, t.leagueCap);
   const s = summarize(picked);
   if (picked.length < t.legs) {
     return { tier: name, ok: false, reason: 'no safe slip', ...s, reasons: [`only ${picked.length}/${t.legs} legs passed the filters`], poolSize: pool.length };
@@ -214,7 +226,7 @@ function buildTierSlip(name, perEvent, cfg = FOOTBALL) {
   return { tier: name, ok: true, ...s, poolSize: pool.length };
 }
 
-// events: [{ev, league, ko}] with ev.markets. Returns { slips: {banker,safe,long}, considered, rejects }.
+// events: [{ev, league, ko}] with ev.markets. Returns { slips: {rookie,hustler,high_roller,legend}, considered, rejects }.
 function selectFootball(events, cfg = FOOTBALL) {
   const perEvent = [], rejects = [];
   for (const e of events) {
@@ -229,12 +241,17 @@ function selectFootball(events, cfg = FOOTBALL) {
 
 // ── odds refresh right before minting ──────────────────────
 // fetchEvent(eventId) -> event object with markets (or null). Returns { legs, dropped }.
-async function refreshLegs(legs, fetchEvent, cfg = FOOTBALL) {
+// `cache` (Map eventId -> event|null) can be shared across tiers; unseen events are fetched BATCH at a time.
+async function refreshLegs(legs, fetchEvent, cfg = FOOTBALL, cache = new Map(), BATCH = 8) {
   const kept = [], dropped = [];
-  const cache = new Map();
+  const need = [...new Set(legs.map(l => l.eventId))].filter(id => !cache.has(id));
+  for (let i = 0; i < need.length; i += BATCH) {
+    const chunk = need.slice(i, i + BATCH);
+    const got = await Promise.all(chunk.map(id => Promise.resolve(fetchEvent(id)).catch(() => null)));
+    chunk.forEach((id, k) => cache.set(id, got[k] || null));
+  }
   for (const l of legs) {
-    let ev = cache.get(l.eventId);
-    if (ev === undefined) { ev = await fetchEvent(l.eventId); cache.set(l.eventId, ev || null); }
+    const ev = cache.get(l.eventId);
     const m = ev && (ev.markets || []).find(x => String(x.id) === l.marketId && (x.specifier || '') === l.specifier && x.status === 0);
     const o = m && (m.outcomes || []).find(x => String(x.id) === l.outcomeId && isOn(x));
     const now = o ? parseFloat(o.odds) : NaN;

@@ -102,12 +102,12 @@ const leg = (i, prob, odds, extra = {}) => ({ eventId: `e${i}`, home: `H${i}`, a
 
 test('banker needs enough strong legs and clears joint bar, else no safe slip', () => {
   const few = [0, 1].map(i => [leg(i, 0.93, 1.04)]);
-  const r = F.buildTierSlip('banker', few);
+  const r = F.buildTierSlip('rookie', few);
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.reason, 'no safe slip');
 
   const enough = [0, 1, 2, 3].map(i => [leg(i, 0.93, 1.04)]);
-  const ok = F.buildTierSlip('banker', enough);
+  const ok = F.buildTierSlip('rookie', enough);
   assert.strictEqual(ok.ok, true);
   assert.strictEqual(ok.legs.length, 4);
   assert.ok(Math.abs(ok.jointProb - 0.93 ** 4) < 1e-3);
@@ -115,9 +115,9 @@ test('banker needs enough strong legs and clears joint bar, else no safe slip', 
 
 test('joint bar is never lowered', () => {
   const weak = [0, 1, 2, 3].map(i => [leg(i, 0.90, 1.05)]); // 0.656 passes 0.60
-  assert.strictEqual(F.buildTierSlip('banker', weak).ok, true);
-  const cfg = { ...FOOTBALL, TIERS: { ...FOOTBALL.TIERS, banker: { ...FOOTBALL.TIERS.banker, minJoint: 0.9 } } };
-  assert.strictEqual(F.buildTierSlip('banker', weak, cfg).ok, false);
+  assert.strictEqual(F.buildTierSlip('rookie', weak).ok, true);
+  const cfg = { ...FOOTBALL, TIERS: { ...FOOTBALL.TIERS, rookie: { ...FOOTBALL.TIERS.rookie, minJoint: 0.9 } } };
+  assert.strictEqual(F.buildTierSlip('rookie', weak, cfg).ok, false);
 });
 
 test('no shared teams and league cap respected', () => {
@@ -127,25 +127,74 @@ test('no shared teams and league cap respected', () => {
     [leg(3, 0.93, 1.04, { league: 'Same' })], [leg(4, 0.92, 1.04, { league: 'Same' })], [leg(5, 0.91, 1.04, { league: 'Same' })],
     [leg(6, 0.90, 1.04)]
   ];
-  const r = F.buildTierSlip('banker', pe);
+  const r = F.buildTierSlip('rookie', pe);
   assert.strictEqual(r.ok, true);
   const names = r.legs.map(l => l.eventId);
   assert.ok(!(names.includes('e1') && names.includes('e2')));
   assert.ok(r.legs.filter(l => l.league === 'Same').length <= FOOTBALL.LEAGUE_CAP);
 });
 
-test('banker takes handicap family only; safe may use fallbacks', () => {
+test('rookie takes handicap family only', () => {
   const pe = [0, 1, 2, 3].map(i => [leg(i, 0.95, 1.04, { family: 'under', tier: 3, type: 'under' })]);
-  assert.strictEqual(F.buildTierSlip('banker', pe).ok, false);
+  assert.strictEqual(F.buildTierSlip('rookie', pe).ok, false);
 });
 
-test('long tier reaches target odds and is flagged high risk', () => {
+test('high_roller tier reaches target odds and is flagged high risk', () => {
   const pe = Array.from({ length: 40 }, (_, i) => [leg(i, 0.86, 1.1, { league: 'L' + i })]);
-  const r = F.buildTierSlip('long', pe);
+  const r = F.buildTierSlip('high_roller', pe);
   assert.strictEqual(r.ok, true);
   assert.ok(r.highRisk);
-  assert.ok(r.totalOdds >= FOOTBALL.TIERS.long.targetOdds);
+  assert.ok(r.totalOdds >= FOOTBALL.TIERS.high_roller.targetOdds);
   assert.ok(r.jointProb < 0.5);
+});
+
+test('tiers are Rookie / Hustler / High Roller / Legend with display names', () => {
+  assert.deepStrictEqual(Object.keys(FOOTBALL.TIERS), ['rookie', 'hustler', 'high_roller', 'legend']);
+  assert.deepStrictEqual(FOOTBALL.NAMES, { rookie: 'Rookie', hustler: 'Hustler', high_roller: 'High Roller', legend: 'Legend' });
+});
+
+test('legend reaches >= 100 odds using at most 50 legs', () => {
+  // 60 matches, each with a 1.12 leg at p=0.80 -> 1.12^50 = 289, so the target is hit well inside the cap
+  const pe = Array.from({ length: 60 }, (_, i) => [leg(i, 0.80, 1.12, { league: 'L' + i })]);
+  const r = F.buildTierSlip('legend', pe);
+  assert.strictEqual(r.ok, true);
+  assert.ok(r.totalOdds >= 100);
+  assert.ok(r.legs.length <= FOOTBALL.MAX_LEGS);
+  assert.ok(r.highRisk);
+});
+
+test('legend is absent when 50 legs cannot reach the target', () => {
+  const pe = Array.from({ length: 80 }, (_, i) => [leg(i, 0.80, 1.05, { league: 'L' + i })]); // 1.05^50 = 11.5
+  const r = F.buildTierSlip('legend', pe);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'no safe slip');
+  assert.ok(r.legs.length <= FOOTBALL.MAX_LEGS);
+});
+
+test('no slip ever exceeds MAX_LEGS', () => {
+  const cfg = { ...FOOTBALL, MAX_LEGS: 12 };
+  const pe = Array.from({ length: 80 }, (_, i) => [leg(i, 0.85, 1.05, { league: 'L' + i })]);
+  assert.ok(F.buildTierSlip('legend', pe, cfg).legs.length <= 12);
+  assert.ok(F.buildTierSlip('high_roller', pe, cfg).legs.length <= 12);
+});
+
+test('target-odds tiers prefer odds-per-risk; legend honours its wider per-leg odds ceiling', () => {
+  // A: 1.10 @ p=0.90 (ratio ~0.90) vs B: 1.38 @ p=0.80 (ratio ~1.45): B should be taken first by value
+  const a = leg(1, 0.90, 1.10), b = leg(1, 0.80, 1.38);
+  const r = F.buildTierSlip('legend', [[a, b]]);
+  assert.strictEqual(r.legs[0].odds, 1.38);
+  // high_roller ceiling is the global MAX_ODDS (1.30): the 1.38 leg is ineligible there
+  const hr = F.buildTierSlip('high_roller', [[b]]);
+  assert.strictEqual(hr.legs.length, 0);
+});
+
+test('slip text for users carries no probabilities, but the payload keeps jointProb', async () => {
+  const sf = require('../src/safe-football');
+  const events = Array.from({ length: 70 }, (_, i) => makeEvent(`e${i}`, `Home${i}`, `Away${i}`, 1.9, 0.9, `League ${i}`));
+  const r = await sf.generateSafeFootball({}, null, { events, dryRun: true, noRefresh: true });
+  assert.ok(r.lines.length > 0);
+  assert.ok(r.lines.every(l => !/%|joint|prob/i.test(l)), r.lines.join('\n'));
+  for (const c of r.codes) assert.ok(typeof c.jointProb === 'number' && c.tierName);
 });
 
 test('refreshLegs drops moved or closed legs and keeps stable ones', async () => {

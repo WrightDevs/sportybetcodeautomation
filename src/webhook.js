@@ -237,7 +237,7 @@ function startWebhookServer(onPaymentActivated) {
       return res.end(JSON.stringify({
         success: true,
         sports: [
-          { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures: Banker, Safe and Long slips built from match probabilities (handicap / double chance first)' },
+          { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures: Rookie, Hustler, High Roller and Legend slips (handicap / double chance first)' },
           { id: 'efootball', name: 'eFootball', icon: '🕹', desc: 'In-play matches with 3+ margin after 40′' },
           { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' },
           { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live vFootball sniper: handicap-first safe selection at 40′ (half-time) and 80′ (full-time); Under / No GG only as a stricter fallback' }

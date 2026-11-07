@@ -38,7 +38,9 @@ const fetchEvent = async id => {
   return j?.data || null;
 };
 
-const legLine = l => `${l.home} v ${l.away} | ${l.desc} @${l.odds} (p=${(l.prob * 100).toFixed(0)}%)`;
+// User-facing text carries NO probabilities (the API payload keeps jointProb; see API docs).
+const legLine = l => `${l.home} v ${l.away} | ${l.desc} @${l.odds}`;
+const label = name => FOOTBALL.NAMES[name] || name;
 
 // Select + mint. opts: { userId, dryRun, tiers:[...], events (inject for tests) }
 async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
@@ -46,6 +48,7 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
   const sel = selectFootball(events);
   const lines = [], codes = [], noSafe = [];
   const names = opts.tiers || Object.keys(sel.slips);
+  const eventCache = new Map(); // shared across tiers so each match is fetched once
 
   for (const name of names) {
     let slip = sel.slips[name];
@@ -56,11 +59,15 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
       const banned = new Set(), notes = [];
       let clean = false;
       for (let pass = 0; pass < 4 && slip.ok; pass++) {
-        const ref = await refreshLegs(slip.legs, fetchEvent);
+        const ref = await refreshLegs(slip.legs, fetchEvent, FOOTBALL, eventCache);
         if (!ref.dropped.length) {
           clean = true;
           slip = { ...slip, legs: ref.legs, totalOdds: Number(ref.legs.reduce((a, l) => a * l.odds, 1).toFixed(2)),
             jointProb: Number(ref.legs.reduce((a, l) => a * l.prob, 1).toFixed(4)) };
+          const tgt = FOOTBALL.TIERS[name].targetOdds;
+          if (tgt && slip.totalOdds < tgt) {
+            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [`odds drifted: @${slip.totalOdds} < target @${tgt} after refresh`], refreshDropped: notes };
+          }
           break;
         }
         ref.dropped.forEach(d => { banned.add(d.eventId); notes.push(`${d.home} v ${d.away}: ${d.reason}`); });
@@ -70,20 +77,22 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
       else if (slip.ok && notes.length) slip.refreshDropped = notes;
     }
     if (!slip.ok) {
-      noSafe.push({ tier: name, reasons: slip.reasons || [], refreshDropped: slip.refreshDropped || [] });
-      lines.push(`${name.toUpperCase()}: no safe slip right now (${(slip.reasons || []).join('; ')})`);
+      // API keeps the detailed (numeric) reasons; the human-readable line is neutral.
+      noSafe.push({ tier: name, tierName: label(name), reasons: slip.reasons || [], refreshDropped: slip.refreshDropped || [] });
+      lines.push(`${label(name)}: not available right now`);
       continue;
     }
     if (opts.dryRun) {
-      lines.push(`${name.toUpperCase()} @${slip.totalOdds} joint ${(slip.jointProb * 100).toFixed(0)}%${slip.highRisk ? ' HIGH RISK' : ''}\n` + slip.legs.map(legLine).join('\n'));
-      codes.push({ tier: name, dry: true, ...slip });
+      lines.push(`${label(name)} @${slip.totalOdds} (${slip.legs.length} legs)\n` + slip.legs.map(legLine).join('\n'));
+      codes.push({ tier: name, tierName: label(name), dry: true, ...slip });
       continue;
     }
     const r = await mint(slip.legs);
-    if (!r.code) { lines.push(`${name.toUpperCase()} failed: ${r.err}`); continue; }
+    if (!r.code) { lines.push(`${label(name)}: could not create a booking code (${r.err})`); continue; }
     const url = r.url || `https://www.sportybet.com/${CFG.REGION}/?shareCode=${r.code}`;
-    lines.push(`${name.toUpperCase()}  ${r.code}  ${slip.legs.length} legs  @${slip.totalOdds}  joint ${(slip.jointProb * 100).toFixed(0)}%${slip.highRisk ? '  (high risk)' : ''}\n${url}`);
-    codes.push({ code: r.code, url, odds: slip.totalOdds, legsCount: slip.legs.length, sport: 'football', tier: name, jointProb: slip.jointProb });
+    lines.push(`${label(name)}  ${r.code}  ${slip.legs.length} legs  @${slip.totalOdds}\n${url}`);
+    codes.push({ code: r.code, url, odds: slip.totalOdds, legsCount: slip.legs.length, sport: 'football',
+      tier: name, tierName: label(name), jointProb: slip.jointProb, ...(slip.highRisk ? { highRisk: true } : {}) });
     try {
       recordSlip({ userId, code: r.code, sport: preset.key || 'football', totalOdds: slip.totalOdds, legs: slip.legs, url });
     } catch (e) { console.error('Failed to record slip:', e.message); }

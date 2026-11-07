@@ -76,7 +76,7 @@ const FOOTBALL = {
   HORIZON_HOURS: num('FB_HORIZON_HOURS', 18),      // only matches kicking off within this window
   MIN_LEAD_MIN: num('FB_MIN_LEAD_MIN', 15),        // skip matches starting sooner than this
   MIN_ODDS: num('FB_MIN_ODDS', 1.03),              // de-vigged probability only reaches ~0.90 at odds ~1.03-1.05
-  MAX_ODDS: num('FB_MAX_ODDS', 1.30),
+  MAX_ODDS: num('FB_MAX_ODDS', 1.30),              // default per-leg ceiling; a tier may widen it with maxLegOdds
   COHERENCE_TOL: num('FB_COHERENCE_TOL', 0.07),    // max |model - de-vigged market|
   MAX_FIT_RMSE: num('FB_MAX_FIT_RMSE', 0.05),      // goal-model must reproduce 1X2 + totals this well
   ALLOW_DC_12: (process.env.FB_ALLOW_DC_12 || 'off') === 'on', // "Home or Away" is not a safe shape by default
@@ -85,12 +85,16 @@ const FOOTBALL = {
   MIN_UNDER_LINE: num('FB_MIN_UNDER_LINE', 3.5),   // never Under a low line
   MAX_MOVE: num('FB_MAX_MOVE', 0.05),              // drop legs whose odds moved > 5% before minting
   LEAGUE_CAP: num('FB_LEAGUE_CAP', 2),
+  MAX_LEGS: num('FB_MAX_LEGS', 50),                // hard cap on legs per slip, every tier
+  // Tier ids are API slugs; NAMES are display labels.
   TIERS: {
-    banker: { legs: num('FB_BANKER_LEGS', 4),  minLegProb: num('FB_BANKER_MIN_PROB', 0.90), minJoint: num('FB_BANKER_MIN_JOINT', 0.60), families: ['handicap'] },
-    safe:   { legs: num('FB_SAFE_LEGS', 8),    minLegProb: num('FB_SAFE_MIN_PROB', 0.84),   minJoint: num('FB_SAFE_MIN_JOINT', 0.30),   families: ['handicap', 'nogg', 'under', 'result'] },
-    // "long" is a target-odds product (not probability-gated): kept, but labelled high risk with its true joint probability.
-    long:   { targetOdds: num('FB_LONG_TARGET_ODDS', 10), minLegProb: num('FB_LONG_MIN_PROB', 0.80), minJoint: 0, families: ['handicap', 'nogg', 'under', 'result'] }
+    rookie:      { legs: num('FB_ROOKIE_LEGS', 4),  minLegProb: num('FB_ROOKIE_MIN_PROB', 0.90),  minJoint: num('FB_ROOKIE_MIN_JOINT', 0.60),  families: ['handicap'] },
+    hustler:     { legs: num('FB_HUSTLER_LEGS', 8), minLegProb: num('FB_HUSTLER_MIN_PROB', 0.84), minJoint: num('FB_HUSTLER_MIN_JOINT', 0.30), families: ['handicap', 'nogg', 'under', 'result'] },
+    // Target-odds tiers are not probability-gated: they stop at the target odds (or MAX_LEGS) and are flagged highRisk.
+    high_roller: { targetOdds: num('FB_HIGH_ROLLER_TARGET_ODDS', 10), minLegProb: num('FB_HIGH_ROLLER_MIN_PROB', 0.80), minJoint: 0, highRisk: true, leagueCap: num('FB_HIGH_ROLLER_LEAGUE_CAP', 3), families: ['handicap', 'nogg', 'under', 'result'] },
+    legend:     { targetOdds: num('FB_LEGEND_TARGET_ODDS', 100), minLegProb: num('FB_LEGEND_MIN_PROB', 0.70), maxLegOdds: num('FB_LEGEND_MAX_LEG_ODDS', 1.40), leagueCap: num('FB_LEGEND_LEAGUE_CAP', 4), minJoint: 0, highRisk: true, families: ['handicap', 'nogg', 'under', 'result'] }
   },
+  NAMES: { rookie: 'Rookie', hustler: 'Hustler', high_roller: 'High Roller', legend: 'Legend' },
   TIER: { handicap: 1, dc: 1, nogg: 2, under: 3, win: 4 },
   FAMILY: { handicap: 'handicap', dc: 'handicap', nogg: 'nogg', under: 'under', win: 'result' },
   JUNK_LEAGUE: /(friendl|youth|reserve|u-?(1[6-9]|2[0-3])\b|women|amateur|srl|esoccer|e-football|efootball|virtual|simulated|cyber)/i,

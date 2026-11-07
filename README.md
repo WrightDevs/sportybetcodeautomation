@@ -282,11 +282,8 @@ straight win) and uses `min(model, de-vigged market)` as the leg probability. Le
 coherence (`FB_COHERENCE_TOL`) or probability bars are dropped. Handicap/Double Chance are preferred; No GG, Under and
 straight wins need a stricter bar.
 
-Three tiers are built (one leg per match, no shared teams, per-league cap): **Banker** (4 legs, joint >= 0.60, handicap
-family only), **Safe** (8 legs, joint >= 0.30) and **Long** (~@10, labelled high risk with its real joint probability).
-A tier that cannot clear its bar returns "no safe slip" instead of lowering it. Odds are re-fetched right before minting
-and legs that moved more than `FB_MAX_MOVE` are dropped. Booking codes only; nothing is staked.
+Four tiers are built (one leg per match, no shared teams, per-league cap, max `FB_MAX_LEGS`=50 legs): **Rookie** (4 legs, joint >= 0.60, handicap family only), **Hustler** (8 legs, joint >= 0.30), **High Roller** (~@10) and **Legend** (>= @100, up to 50 legs). High Roller and Legend pick the most odds per unit of risk and are flagged `highRisk`; if 50 legs cannot reach the target odds the tier is simply absent. A tier that cannot clear its bar returns "no safe slip" instead of lowering it. Odds are re-fetched right before minting and legs that moved more than `FB_MAX_MOVE` are dropped. User-facing text (`lines`, bot messages) shows no probabilities; the API payload keeps `jointProb` and the selection log keeps every number for calibration. Booking codes only; nothing is staked. Legend realistically hits well under 1% of the time.
 
 Limits: probabilities come from market prices (no team form/injury data yet), so they cannot beat the market; the
 independent-Poisson model understates draws (the coherence check covers this); safe legs sit at odds ~1.03-1.30 so the
-Banker pays little (~@1.1-1.3). Calibrate with `npm run settle -- --report` after some days of logged slips.
+Rookie pays little (~@1.1-1.3). Calibrate with `npm run settle -- --report` after some days of logged slips.

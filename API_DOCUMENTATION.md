@@ -111,9 +111,10 @@ const res = await fetch('https://sportybetcodeautomation.onrender.com/api/genera
 
 const data = await res.json();
 if (data.success && data.codes?.length > 0) {
-  // Football returns up to 3 codes, one per tier: pick by `tier`, do not assume codes[0] is the ~10 odds slip.
-  const banker = data.codes.find(c => c.tier === 'banker'); // safest, low odds
-  const long = data.codes.find(c => c.tier === 'long');     // ~@10, high risk
+  // Football returns up to 4 codes, one per tier: pick by `tier`, do not assume codes[0] is the ~10 odds slip.
+  const rookie = data.codes.find(c => c.tier === 'rookie');          // safest, low odds
+  const highRoller = data.codes.find(c => c.tier === 'high_roller'); // ~@10
+  const legend = data.codes.find(c => c.tier === 'legend');          // >= @100, up to 50 legs
   const first = data.codes[0];
   const code = first.code; // e.g. "BC7X92K"
   const url = first.url;   // e.g. "https://www.sportybet.com/ng/?shareCode=BC7X92K"
@@ -333,35 +334,52 @@ Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direc
       "odds": 1.13,
       "legsCount": 4,
       "sport": "football",
-      "tier": "banker",
+      "tier": "rookie",
+      "tierName": "Rookie",
       "jointProb": 0.72
     },
     {
       "code": "BC8Y10M",
       "url": "https://www.sportybet.com/ng/?shareCode=BC8Y10M",
-      "odds": 10.42,
-      "legsCount": 26,
+      "odds": 10.64,
+      "legsCount": 16,
       "sport": "football",
-      "tier": "long",
-      "jointProb": 0.02
+      "tier": "high_roller",
+      "tierName": "High Roller",
+      "jointProb": 0.04,
+      "highRisk": true
+    },
+    {
+      "code": "BC9Z22P",
+      "url": "https://www.sportybet.com/ng/?shareCode=BC9Z22P",
+      "odds": 119.15,
+      "legsCount": 18,
+      "sport": "football",
+      "tier": "legend",
+      "tierName": "Legend",
+      "jointProb": 0.003,
+      "highRisk": true
     }
   ],
   "lines": [
-    "BANKER  BC7X92K  4 legs  @1.13  joint 72%\nhttps://www.sportybet.com/ng/?shareCode=BC7X92K",
-    "SAFE: no safe slip right now (joint probability 0.28 < 0.3)",
-    "LONG  BC8Y10M  26 legs  @10.42  joint 2%  (high risk)\nhttps://www.sportybet.com/ng/?shareCode=BC8Y10M"
+    "Rookie  BC7X92K  4 legs  @1.13\nhttps://www.sportybet.com/ng/?shareCode=BC7X92K",
+    "Hustler: not available right now",
+    "High Roller  BC8Y10M  16 legs  @10.64\nhttps://www.sportybet.com/ng/?shareCode=BC8Y10M",
+    "Legend  BC9Z22P  18 legs  @119.15\nhttps://www.sportybet.com/ng/?shareCode=BC9Z22P"
   ],
   "generatedAt": "2026-11-04T15:54:00.000Z"
 }
 ```
 
 **Football changes (the route, method and request body are unchanged):**
-- `codes` holds **up to 3** items, one per tier, and is no longer a list of 50-leg chunks. Select by `tier`, not by position.
-- New optional fields on each code (football only): `tier` (`"banker"` | `"safe"` | `"long"`) and `jointProb` (0-1 estimated probability that every leg wins). `odds`, `legsCount`, `code`, `url`, `sport` keep their meaning. `efootball` / `vfootball` responses are unchanged.
-- **Banker**: ~4 legs, handicap / double chance only, low total odds (typically @1.1-1.3). **Safe**: ~8 legs. **Long**: ~@10, **high risk** (low `jointProb`), label it as such in the UI.
-- A tier that cannot clear its safety bar is simply missing from `codes`; `lines` then contains a `"<TIER>: no safe slip right now (...)"` entry. `count` equals `codes.length`.
-- Probabilities are estimates, not guarantees.
-- A fresh football run takes longer (roughly 30-90 seconds). Use a client timeout of at least 120 seconds, keep the `429 busy` handling, and prefer the 60s cache (`fresh: false`).
+- `codes` holds **up to 4** items, one per tier, each with **at most 50 legs**. Select by `tier`, not by position.
+- `tier` is a slug: `"rookie"` | `"hustler"` | `"high_roller"` | `"legend"`. `tierName` is the display label: `"Rookie"`, `"Hustler"`, `"High Roller"`, `"Legend"`. (Earlier drafts used banker / safe / long.)
+- **Rookie**: ~4 legs, handicap / double chance only, low total odds (typically @1.1-1.3). **Hustler**: ~8 legs. **High Roller**: about @10. **Legend**: @100 or more, up to 50 legs.
+- Optional fields on each football code: `tier`, `tierName`, `jointProb` (0-1 estimated probability that every leg wins) and `highRisk` (`true` for High Roller and Legend). `odds`, `legsCount`, `code`, `url`, `sport` keep their meaning. `efootball` / `vfootball` responses are unchanged.
+- **Do not show `jointProb` to end users.** It stays in the API for the dashboard's own use (sorting, analytics, admin views). The `lines` strings contain no probabilities.
+- A tier that cannot be built is simply missing from `codes` (for example Legend when 50 legs cannot reach @100); `lines` then has a `"<Tier>: not available right now"` entry. `count` equals `codes.length`.
+- Probabilities are estimates, not guarantees. Legend in particular is a long shot, so keep a general disclaimer in the UI.
+- A fresh football run takes longer (roughly 1-3 minutes with four tiers and up to 50-leg codes). Use a client timeout of at least 180 seconds, keep the `429 busy` handling, and prefer the 60s cache (`fresh: false`).
 
 #### No Fixtures Response (`200 OK`)
 ```json
@@ -382,9 +400,9 @@ Returned when none of the tiers cleared its safety bar. The bar is never lowered
   "count": 0,
   "message": "Football: no safe slip right now. The selector does not lower its safety bar.",
   "noSafeSlip": [
-    { "tier": "banker", "reasons": ["only 2/4 legs passed the filters"], "refreshDropped": [] }
+    { "tier": "rookie", "tierName": "Rookie", "reasons": ["only 2/4 legs passed the filters"], "refreshDropped": [] }
   ],
-  "lines": ["BANKER: no safe slip right now (only 2/4 legs passed the filters)"]
+  "lines": ["Rookie: not available right now"]
 }
 ```
 
@@ -405,7 +423,7 @@ Returns metadata for all available sports to populate UI tabs and buttons.
       "id": "football",
       "name": "Football",
       "icon": "⚽",
-      "desc": "Real fixtures: Banker, Safe and Long slips built from match probabilities (handicap / double chance first)"
+      "desc": "Real fixtures: Rookie, Hustler, High Roller and Legend slips (handicap / double chance first)"
     },
     {
       "id": "efootball",
@@ -976,12 +994,17 @@ export interface SportyCode {
   odds: number;
   legsCount: number;
   sport: string;
-  tier?: 'banker' | 'safe' | 'long'; // football only
-  jointProb?: number;                // football only, 0-1 estimate
+  tier?: FootballTier;  // football only
+  tierName?: string;    // football only, display label e.g. 'High Roller'
+  jointProb?: number;   // football only, 0-1 estimate. Do NOT show to end users.
+  highRisk?: boolean;   // football only: true for 'high_roller' and 'legend'
 }
 
+export type FootballTier = 'rookie' | 'hustler' | 'high_roller' | 'legend';
+
 export interface NoSafeSlipTier {
-  tier: 'banker' | 'safe' | 'long';
+  tier: FootballTier;
+  tierName?: string;
   reasons: string[];
   refreshDropped: string[];
 }
