@@ -119,6 +119,8 @@ if (data.success && data.codes?.length > 0) {
   const code = first.code; // e.g. "BC7X92K"
   const url = first.url;   // e.g. "https://www.sportybet.com/ng/?shareCode=BC7X92K"
   const odds = first.odds; // e.g. 1.13
+} else if (res.status === 403 && data.code === 'subscription_required') {
+  // Not subscribed: show the upgrade / payment screen.
 } else if (!data.success && data.noSafeSlip) {
   // Football: no tier cleared its safety bar. Show data.message (and optionally data.noSafeSlip[].reasons).
 }
@@ -284,6 +286,27 @@ If the website dashboard uses traditional Email/Password accounts:
 3. Save `telegramId: id` in your user document in MongoDB.
 4. Call `GET /api/subscription/:telegramId` to check if they already have an active subscription from the bot!
 
+#### Scenario D: Email-only account (no Telegram) pays on the web
+A user who signed up with email only can pay, subscribe and use every web feature without ever linking Telegram. Telegram is only needed for bot access and bot notifications.
+
+What the **dashboard server** must do:
+1. **Always use one stable id.** Send the account's Mongo `_id` (string) as `userId` on every call (`/api/payment/initialize`, `/api/quest-special/*`, `/api/subscription/:userId`, `/api/generate`). Also send `email` (lowercase) on `/api/payment/initialize`. Do **not** send only the email on its own, and do not switch between `_id` and email from one call to the next.
+2. **Store ids in the format the backend searches for.** In the `users` collection keep `email` lowercase, `telegramId` as a **string** (not a number) and `username` lowercase. The backend resolves a user with an exact match on `telegramId`, `email`, `username` or `_id`.
+3. **Initialize payment:** `POST /api/payment/initialize` with `{ "userId": "<_id>", "email": "user@example.com" }` (add `"telegramId"` only if the user has linked Telegram). Open the returned `checkoutUrl` or show the `virtualAccount` details. Keep the returned `reference`.
+4. **Confirm payment (recommended pattern):**
+   - Poll `GET /api/subscription/:userId` every 3-5 seconds (for up to about 10 minutes) until `subscription.active` is `true`. This call only reads, so it is safe to repeat. The QuestPay webhook (`/webhook/questpay`) activates the subscription server-side; no dashboard action is needed for that.
+   - Call `GET /api/payment/verify/:reference` when the user taps "I have paid" (once is enough; avoid tight polling). Each payment reference now credits **only once**: repeated calls, webhook retries and the bot's verify button return `alreadyCredited: true` and add no extra days.
+5. **Show the result from `/api/subscription/:userId`**, which returns `active`, `daysLeft`, `expDate`. Web-only users get no Telegram message, so the dashboard must display the confirmation itself.
+
+How it works on the backend: when a payment is credited, the subscription is saved under the id that was sent and copied to every id on that user's record (`_id`, `email`, `username`, `telegramId`). Any of those ids then reads as subscribed.
+
+#### Scenario E: Email user links Telegram later (or Telegram user adds an email)
+1. In Settings, show **Link Telegram** (Telegram Login Widget). When Telegram returns the verified `id`, save `telegramId: String(id)` on the **same** user document the person is logged in with. Never create a second user document for the Telegram identity, and merge documents if one already exists. Two documents for one person means the subscription is not shared between them.
+2. Right after saving, call `GET /api/subscription/<telegramId>` once. This makes the backend copy an existing web subscription to the Telegram id, so the bot recognises the user straight away. If the user paid in the bot first, the same call (or `/api/subscription/<_id>`) shows it on the web.
+3. From then on, `/api/payment/initialize` automatically credits the Telegram id as well, and the bot sends the "Payment confirmed" message in Telegram.
+
+Login summary: email-only users log in with email; users who linked Telegram may also use "Log In with Telegram" (`POST /api/auth/telegram`). Both must resolve to the same user document.
+
 ---
 
 #### BotFather Whitelist Configuration (Required)
@@ -317,8 +340,19 @@ Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direc
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `sport` | string | **Yes** | Options: `"football"`, `"efootball"`, `"vfootball"` |
-| `userId` | string | Optional | Email or user ID to attribute the slip for personal win-rate tracking |
+| `userId` | string | **Yes** | The account's Mongo `_id`, email, username or Telegram id. **The user must have an active VIP subscription** (see the 403 response below). Also used to attribute slips for win-rate tracking |
 | `fresh` | boolean | Optional | Default `false`. If `true`, forces a live scraper run bypassing the 60s cache |
+
+#### Subscription Required (`403 Forbidden`)
+`/api/generate` now requires an active subscription for the `userId` (admins always pass). Any id linked to the user's account works (`_id`, email, username, Telegram id).
+```json
+{
+  "success": false,
+  "error": "VIP subscription required to generate codes",
+  "code": "subscription_required"
+}
+```
+Handle `code === "subscription_required"` by showing the upgrade / pay screen. Requests without a `userId` are treated as not subscribed.
 
 #### Success Response (`200 OK`)
 ```json
@@ -961,9 +995,13 @@ Called by the web frontend after the user completes payment (or clicks "I have t
   "status": "paid",
   "chatId": "6916043986",
   "reference": "VIP-6916043986-1741234567890",
-  "amount": 10
+  "amount": 10,
+  "alreadyCredited": false
 }
 ```
+`alreadyCredited` is `true` when this payment reference was credited earlier (by the webhook, a previous verify call or the bot). The subscription is never extended twice for one reference, so the call is safe to repeat. The user is only notified on Telegram by the call that actually credited the payment.
+
+Not paid yet: `{ "success": false, "status": "pending", "message": "..." }`. Keep checking `GET /api/subscription/:userId`.
 
 ---
 
@@ -972,7 +1010,8 @@ Configured inside the QuestPay Merchant Dashboard under **Webhook Settings**:
 - **URL:** `https://sportybetcodeautomation.onrender.com/webhook/questpay`
 - **Security:** Verified with HMAC-SHA256 signature header `x-questpay-signature`.
 - **Event:** `payment.received`
-- **Action:** Automatically credits the subscriber for `SUB_DAYS` (7 days) and notifies them in Telegram.
+- **Action:** Automatically credits the subscriber for `SUB_DAYS` (7 days) and notifies them in Telegram (if they have Telegram linked).
+- **Safety:** a webhook with a valid signature is credited directly. A webhook with a missing or invalid signature is only credited if QuestPay's own verify API confirms that reference as paid (the chat id comes from QuestPay's record, not from the request body), so a forged request cannot grant a subscription. Each reference credits once; retries return `"credited": false`. Set `STRICT_WEBHOOK=true` to also reject unsigned requests outright (only after confirming QuestPay signs with `x-questpay-signature`).
 
 ### Health Check & Keep-Alive
 - **URL:** `https://sportybetcodeautomation.onrender.com/ping`
@@ -1020,6 +1059,8 @@ export interface GenerateResponse {
   lines?: string[];
   message?: string;
   noSafeSlip?: NoSafeSlipTier[]; // football, when no tier cleared its bar
+  error?: string;                // present on 403/4xx/5xx responses
+  code?: 'subscription_required' | string; // HTTP 403: user has no active VIP subscription
   generatedAt?: string;
 }
 

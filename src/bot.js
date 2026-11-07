@@ -8,6 +8,7 @@ const {
   isSubscribed,
   getSubscription,
   addSubscription,
+  creditPaymentOnce,
   revokeSubscription,
   listSubscribers
 } = require('./subs');
@@ -161,8 +162,11 @@ async function handleCheckRef(chat, messageId, reference) {
   const res = await verifyQuestPayCheckout(reference);
 
   if (res.ok && res.status === 'paid') {
-    addSubscription(chat, res.days || CFG.SUB_DAYS, { method: 'questpay_v1_verify', reference, amount: res.amount });
+    const credit = await creditPaymentOnce(chat, reference, res.days || CFG.SUB_DAYS, { method: 'questpay_v1_verify', amount: res.amount });
     const sub = getSubscription(chat);
+    if (credit.duplicate) {
+      return send(chat, `✅ <b>This payment was already applied.</b>\n\nYour VIP Subscription is active until <b>${sub.expDate || 'the date shown in your account'}</b>.`, { reply_markup: sportsMenu });
+    }
 
     const text = `🎉 <b>Payment Verified!</b>\n\n`
       + `Your VIP Subscription is now <b>ACTIVE</b> for ${CFG.SUB_DAYS} days!\n`

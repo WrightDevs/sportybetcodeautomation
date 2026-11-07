@@ -3,7 +3,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { CFG } = require('./config');
 const { parseQuestPayWebhook, initializeQuestPayCheckout, verifyQuestPayCheckout } = require('./questpay');
-const { addSubscription, getSubscription, isSubscribed } = require('./subs');
+const { addSubscription, creditPaymentOnce, getSubscription, isSubscribed } = require('./subs');
 const { getSubscriber, findUser } = require('./db');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
@@ -18,6 +18,19 @@ const {
   getLastNoSafe,
   MAX_DAILY: QUEST_SPECIAL_MAX_DAILY
 } = require('./quest-special');
+
+// Subscription check that also resolves linked ids (email / _id / username / telegramId) through the database.
+async function hasActiveSubscription(userId) {
+  const id = String(userId || '').trim();
+  if (!id) return false;
+  if (isSubscribed(id)) return true;
+  try {
+    const deep = await getSubscriber(id);
+    return !!(deep && Number(deep.expiresAt) > Date.now());
+  } catch (_) {
+    return false;
+  }
+}
 
 // In-memory cache & concurrency lock for web generation
 let isGenerating = false;
@@ -409,16 +422,18 @@ function startWebhookServer(onPaymentActivated) {
         }
 
         const chatId = result.chatId;
+        let alreadyCredited = false;
         if (chatId) {
-          addSubscription(chatId, result.days || CFG.SUB_DAYS, {
+          const credit = await creditPaymentOnce(chatId, ref, result.days || CFG.SUB_DAYS, {
             method: 'questpay_web_verify',
-            reference: ref,
             amount: result.amount,
             paidAt: result.paidAt || Date.now()
           });
+          alreadyCredited = credit.duplicate;
 
-          if (typeof onPaymentActivated === 'function') {
-            await onPaymentActivated(chatId, ref, result.amount);
+          // Notify only when this call actually credited the payment (not on repeats)
+          if (credit.credited && typeof onPaymentActivated === 'function') {
+            try { await onPaymentActivated(chatId, ref, result.amount); } catch (_) {}
           }
         }
 
@@ -428,7 +443,8 @@ function startWebhookServer(onPaymentActivated) {
           status: 'paid',
           chatId,
           reference: ref,
-          amount: result.amount
+          amount: result.amount,
+          alreadyCredited
         }));
       })();
       return;
@@ -574,6 +590,16 @@ function startWebhookServer(onPaymentActivated) {
           }));
         }
 
+        // VIP gate: generating codes requires an active subscription (any linked id: _id, email, username, Telegram id)
+        if (!(await hasActiveSubscription(userId))) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            success: false,
+            error: 'VIP subscription required to generate codes',
+            code: 'subscription_required'
+          }));
+        }
+
         // Return recent cache (within 60s) to give instant sub-50ms response if not forced fresh
         const cached = codeCache.get(sportKey);
         if (!fresh && cached && Date.now() - cached.timestamp < 60000) {
@@ -688,24 +714,50 @@ function startWebhookServer(onPaymentActivated) {
           return res.end(JSON.stringify({ status: 'ignored', reason: parsed.err }));
         }
 
-        const { chatId, reference, amount, days } = parsed;
-        console.log(`  questpay webhook: payment.received success for chat=${chatId} ref=${reference} amount=₦${amount}`);
+        let { chatId, reference, amount, days } = parsed;
 
+        // A request is only trusted if its signature is valid. Otherwise (missing/invalid signature) the
+        // payment is confirmed server-to-server with QuestPay before anything is credited, so a forged
+        // "payment.received" body cannot grant a subscription.
+        const signedOk = !!sig && verifySignature(rawBody, sig);
+        if (!signedOk) {
+          let confirmed = null;
+          if (reference) {
+            for (let attempt = 0; attempt < 3 && !(confirmed && confirmed.ok); attempt++) {
+              if (attempt) await new Promise(r => setTimeout(r, 2000)); // QuestPay may lag the webhook slightly
+              confirmed = await verifyQuestPayCheckout(reference);
+            }
+          }
+          if (!confirmed || !confirmed.ok) {
+            console.warn(`  questpay webhook REJECTED (unsigned/invalid and not confirmed by QuestPay) ref=${reference || 'none'}`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'ignored', reason: 'payment could not be confirmed with QuestPay' }));
+          }
+          // Prefer QuestPay's own record over the request body
+          chatId = confirmed.chatId || chatId;
+          amount = confirmed.amount || amount;
+          days = confirmed.days || days;
+        }
+
+        console.log(`  questpay webhook: payment.received success for chat=${chatId} ref=${reference} amount=₦${amount} (${signedOk ? 'signed' : 'confirmed via QuestPay'})`);
+
+        let credited = false, duplicate = false;
         if (chatId) {
-          addSubscription(chatId, days || CFG.SUB_DAYS, {
+          const credit = await creditPaymentOnce(chatId, reference, days || CFG.SUB_DAYS, {
             method: 'questpay_webhook',
-            reference,
             amount: amount || CFG.SUB_PRICE,
             paidAt: Date.now()
           });
+          credited = credit.credited; duplicate = credit.duplicate;
 
-          if (typeof onPaymentActivated === 'function') {
-            await onPaymentActivated(chatId, reference, amount);
+          // Notify once per payment; a failed Telegram message (e.g. web-only user) must not fail the webhook
+          if (credit.credited && typeof onPaymentActivated === 'function') {
+            try { await onPaymentActivated(chatId, reference, amount); } catch (e) { console.warn('  payment notification failed:', e.message); }
           }
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: true, message: 'Webhook processed', chatId, reference }));
+        return res.end(JSON.stringify({ success: true, message: duplicate ? 'Already processed' : 'Webhook processed', chatId, reference, credited }));
       });
       return;
     }

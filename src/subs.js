@@ -1,6 +1,6 @@
 'use strict';
 const { CFG } = require('./config');
-const { getSubscriber, saveSubscriber, removeSubscriber, subCache } = require('./db');
+const { getSubscriber, saveSubscriber, removeSubscriber, subCache, claimPaymentRef, releasePaymentRef } = require('./db');
 
 function isAdmin(chatId) {
   const id = String(chatId || '').trim();
@@ -55,6 +55,23 @@ function addSubscription(chatId, days = 7, meta = {}) {
   };
 }
 
+/**
+ * Credit a paid reference at most once. Webhook retries, repeated /api/payment/verify calls and the bot's
+ * verify button can all report the same payment; only the first one extends the subscription.
+ * Returns { credited: true } or { credited: false, duplicate: true }.
+ */
+async function creditPaymentOnce(chatId, reference, days, meta = {}) {
+  const fresh = await claimPaymentRef(reference, { chatId: String(chatId) });
+  if (!fresh) return { credited: false, duplicate: true };
+  try {
+    addSubscription(chatId, days, { ...meta, reference });
+  } catch (e) {
+    await releasePaymentRef(reference); // let the payment be retried
+    throw e;
+  }
+  return { credited: true, duplicate: false };
+}
+
 function revokeSubscription(chatId) {
   const id = String(chatId);
   removeSubscriber(id);
@@ -82,6 +99,7 @@ module.exports = {
   isSubscribed,
   getSubscription,
   addSubscription,
+  creditPaymentOnce,
   revokeSubscription,
   listSubscribers
 };

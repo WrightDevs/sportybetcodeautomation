@@ -13,6 +13,7 @@ const DB_FILE = path.join(ROOT, 'subscribers.json');
 const DATA_DIR = path.join(ROOT, 'data');
 const SLIPS_FILE = path.join(DATA_DIR, 'slips.json');
 const USAGE_FILE = path.join(DATA_DIR, 'quest_usage.json');
+const PAID_REFS_FILE = process.env.PAID_REFS_FILE || path.join(DATA_DIR, 'paid_refs.json');
 
 // Ensure local directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -41,6 +42,7 @@ let subscribersCol = null;
 let usersCol = null;
 let slipsCol = null;
 let questUsageCol = null;
+let paidRefsCol = null;
 let isMongoReady = false;
 let mongoConnectPromise = null;
 
@@ -91,6 +93,20 @@ const localData = loadLocalSubscribers();
 for (const [id, data] of Object.entries(localData)) {
   subCache.set(String(id), data);
 }
+
+// Payment references that already credited a subscription (idempotency: webhook retries, repeated verify calls)
+const paidRefs = new Set();
+function loadPaidRefs() {
+  try {
+    if (fs.existsSync(PAID_REFS_FILE)) {
+      for (const r of (JSON.parse(fs.readFileSync(PAID_REFS_FILE, 'utf8')) || [])) paidRefs.add(String(r));
+    }
+  } catch (_) {}
+}
+function savePaidRefs() {
+  try { fs.writeFileSync(PAID_REFS_FILE, JSON.stringify([...paidRefs].slice(-5000)), 'utf8'); } catch (_) {}
+}
+loadPaidRefs();
 
 const localUsage = loadLocalQuestUsage();
 for (const [uid, item] of Object.entries(localUsage)) {
@@ -144,6 +160,8 @@ if (MONGO_URI) {
         usersCol = mongoDb.collection('users');
         slipsCol = mongoDb.collection('slips');
         questUsageCol = mongoDb.collection('quest_usage');
+        paidRefsCol = mongoDb.collection('paid_refs');
+        await paidRefsCol.createIndex({ ref: 1 }, { unique: true }).catch(() => {});
 
         // Ensure indices for performance
         await subscribersCol.createIndex({ chatId: 1 }, { unique: true }).catch(() => {});
@@ -521,7 +539,45 @@ async function incrementQuestUsage(userId) {
   return newCount;
 }
 
+/**
+ * Claim a payment reference so it can credit a subscription only once.
+ * Returns true if this call is the first claim, false if the reference was already credited.
+ * A missing reference cannot be de-duplicated, so it returns true.
+ * Atomic within a process (in-memory Set) and across processes/restarts (unique index in MongoDB).
+ */
+async function claimPaymentRef(reference, meta = {}) {
+  const ref = String(reference || '').trim();
+  if (!ref) return true;
+  if (paidRefs.has(ref)) return false;
+  paidRefs.add(ref); // claim synchronously so concurrent callers in this process lose the race
+  savePaidRefs();
+
+  await ensureMongo();
+  if (isMongoReady && paidRefsCol) {
+    try {
+      await paidRefsCol.insertOne({ ref, claimedAt: new Date(), ...meta });
+    } catch (e) {
+      if (e && e.code === 11000) return false; // already credited earlier (another instance / before a restart)
+      console.error('Failed to persist paid reference:', e.message);
+    }
+  }
+  return true;
+}
+
+/** Undo a claim when crediting failed after the claim, so the payment can be retried. */
+async function releasePaymentRef(reference) {
+  const ref = String(reference || '').trim();
+  if (!ref) return;
+  paidRefs.delete(ref);
+  savePaidRefs();
+  if (isMongoReady && paidRefsCol) {
+    try { await paidRefsCol.deleteOne({ ref }); } catch (_) {}
+  }
+}
+
 module.exports = {
+  claimPaymentRef,
+  releasePaymentRef,
   getSubscriber,
   saveSubscriber,
   removeSubscriber,
