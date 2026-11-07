@@ -43,6 +43,7 @@ let usersCol = null;
 let slipsCol = null;
 let questUsageCol = null;
 let paidRefsCol = null;
+let checkoutsCol = null;
 let isMongoReady = false;
 let mongoConnectPromise = null;
 
@@ -108,6 +109,22 @@ function savePaidRefs() {
 }
 loadPaidRefs();
 
+// Issued checkouts per user and the ones voided because another checkout of the same user was credited first
+// (one transfer must never be able to settle several open checkouts).
+const CHECKOUTS_FILE = process.env.CHECKOUTS_FILE || PAID_REFS_FILE.replace(/\.json$/, '') + '.checkouts.json';
+const checkouts = new Map(); // ref -> { userKey, at, voided }
+try {
+  if (fs.existsSync(CHECKOUTS_FILE)) {
+    for (const [ref, v] of Object.entries(JSON.parse(fs.readFileSync(CHECKOUTS_FILE, 'utf8')) || {})) checkouts.set(ref, v);
+  }
+} catch (_) {}
+function saveCheckouts() {
+  try {
+    const entries = [...checkouts.entries()].slice(-5000);
+    fs.writeFileSync(CHECKOUTS_FILE, JSON.stringify(Object.fromEntries(entries)), 'utf8');
+  } catch (_) {}
+}
+
 const localUsage = loadLocalQuestUsage();
 for (const [uid, item] of Object.entries(localUsage)) {
   questUsageCache.set(String(uid), item);
@@ -162,6 +179,9 @@ if (MONGO_URI) {
         questUsageCol = mongoDb.collection('quest_usage');
         paidRefsCol = mongoDb.collection('paid_refs');
         await paidRefsCol.createIndex({ ref: 1 }, { unique: true }).catch(() => {});
+        checkoutsCol = mongoDb.collection('checkout_refs');
+        await checkoutsCol.createIndex({ ref: 1 }, { unique: true }).catch(() => {});
+        await checkoutsCol.createIndex({ userKey: 1 }).catch(() => {});
 
         // Ensure indices for performance
         await subscribersCol.createIndex({ chatId: 1 }, { unique: true }).catch(() => {});
@@ -575,7 +595,63 @@ async function releasePaymentRef(reference) {
   }
 }
 
+/** Stable per-person key: the user document _id when the id resolves to a user, otherwise the id itself. */
+async function userKeyOf(chatId) {
+  const id = String(chatId || '').trim();
+  if (!id) return '';
+  try {
+    const u = await findUser(id);
+    if (u && u._id) return String(u._id);
+  } catch (_) {}
+  return id;
+}
+
+/** Remember that a checkout reference was issued to this person. */
+async function registerCheckout(reference, chatId) {
+  const ref = String(reference || '').trim();
+  if (!ref) return;
+  const userKey = await userKeyOf(chatId);
+  checkouts.set(ref, { userKey, at: Date.now(), voided: false });
+  saveCheckouts();
+  if (isMongoReady && checkoutsCol) {
+    try { await checkoutsCol.insertOne({ ref, userKey, voided: false, createdAt: new Date() }); } catch (_) {}
+  }
+}
+
+async function isRefVoided(reference) {
+  const ref = String(reference || '').trim();
+  if (!ref) return false;
+  const c = checkouts.get(ref);
+  if (c && c.voided) return true;
+  if (isMongoReady && checkoutsCol) {
+    try {
+      const d = await checkoutsCol.findOne({ ref });
+      if (d && d.voided) { checkouts.set(ref, { ...(c || {}), userKey: d.userKey, voided: true }); return true; }
+    } catch (_) {}
+  }
+  return false;
+}
+
+/** After one checkout of this person was credited, void every other checkout issued to them. */
+async function voidOtherCheckouts(chatId, exceptRef) {
+  const userKey = await userKeyOf(chatId);
+  const keep = String(exceptRef || '').trim();
+  if (!userKey) return 0;
+  let n = 0;
+  for (const [ref, c] of checkouts) {
+    if (ref !== keep && c.userKey === userKey && !c.voided) { c.voided = true; n++; }
+  }
+  if (n) saveCheckouts();
+  if (isMongoReady && checkoutsCol) {
+    try { await checkoutsCol.updateMany({ userKey, ref: { $ne: keep }, voided: { $ne: true } }, { $set: { voided: true, voidedAt: new Date() } }); } catch (_) {}
+  }
+  return n;
+}
+
 module.exports = {
+  registerCheckout,
+  isRefVoided,
+  voidOtherCheckouts,
   claimPaymentRef,
   releasePaymentRef,
   getSubscriber,

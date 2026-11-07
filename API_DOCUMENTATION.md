@@ -1001,6 +1001,8 @@ Called by the web frontend after the user completes payment (or clicks "I have t
 ```
 `alreadyCredited` is `true` when this payment reference was credited earlier (by the webhook, a previous verify call or the bot). The subscription is never extended twice for one reference, so the call is safe to repeat. The user is only notified on Telegram by the call that actually credited the payment.
 
+**Several open checkouts:** if a user starts more than one checkout (for example one in Telegram and one on the dashboard) and pays once, only the first checkout reported as paid is credited. Their other open checkouts are voided and also return `alreadyCredited: true`. Always show and verify the most recent `reference`, and create a new checkout for each new payment.
+
 Not paid yet: `{ "success": false, "status": "pending", "message": "..." }`. Keep checking `GET /api/subscription/:userId`.
 
 ---

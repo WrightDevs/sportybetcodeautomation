@@ -51,6 +51,37 @@ test('creditPaymentOnce: concurrent calls with one reference credit exactly once
   assert.equal(saved.filter(s => s.id === 'u_race').length, 1);
 });
 
+test('two open checkouts for one user: one payment credits only once (haley scenario)', async () => {
+  saved.length = 0;
+  await db.registerCheckout('VIP-777-A', '777');   // started in Telegram, abandoned
+  await db.registerCheckout('VIP-777-B', '777');   // started on the dashboard, paid
+  const b = await subs.creditPaymentOnce('777', 'VIP-777-B', 7, { method: 't' });
+  const a = await subs.creditPaymentOnce('777', 'VIP-777-A', 7, { method: 't' }); // provider also reports A as paid
+  const a2 = await subs.creditPaymentOnce('777', 'VIP-777-A', 7, { method: 't' });
+  assert.equal(b.credited, true);
+  assert.equal(a.credited, false); assert.equal(a.duplicate, true); assert.equal(a.superseded, true);
+  assert.equal(a2.credited, false);
+  assert.equal(saved.filter(s => s.id === '777').length, 1);
+});
+
+test('a checkout created AFTER a credit still credits (genuine second payment works)', async () => {
+  saved.length = 0;
+  await db.registerCheckout('VIP-888-A', '888');
+  assert.equal((await subs.creditPaymentOnce('888', 'VIP-888-A', 7)).credited, true);
+  await db.registerCheckout('VIP-888-B', '888');
+  assert.equal((await subs.creditPaymentOnce('888', 'VIP-888-B', 7)).credited, true);
+  assert.equal(saved.filter(s => s.id === '888').length, 2);
+});
+
+test('checkouts of different users do not void each other; unregistered refs behave as before', async () => {
+  saved.length = 0;
+  await db.registerCheckout('VIP-901-A', '901');
+  await db.registerCheckout('VIP-902-A', '902');
+  assert.equal((await subs.creditPaymentOnce('901', 'VIP-901-A', 7)).credited, true);
+  assert.equal((await subs.creditPaymentOnce('902', 'VIP-902-A', 7)).credited, true);
+  assert.equal((await subs.creditPaymentOnce('903', 'LEGACY-REF', 7)).credited, true);
+});
+
 const post = (p, obj, headers = {}) => realFetch(`http://localhost:${PORT}${p}`, {
   method: 'POST', headers: { 'content-type': 'application/json', ...headers },
   body: typeof obj === 'string' ? obj : JSON.stringify(obj)
@@ -96,6 +127,21 @@ test('webhook, generate gate and verify route', { timeout: 60000 }, async (t) =>
     assert.equal(a.success, true); assert.equal(a.alreadyCredited, false);
     assert.equal(b.alreadyCredited, true); assert.equal(c.alreadyCredited, true);
     assert.equal(saved.filter(s => s.id === 'web_payer').length, 1);
+  });
+
+  await t.test('one payment reported by webhook + verify + retries grants exactly 7 days in total', async () => {
+    saved.length = 0; db.subCache.delete('haley_like');
+    verifyAnswer = paidAnswer('REF-ONE-WEEK', 'haley_like');
+    const raw = body('REF-ONE-WEEK', 'haley_like');
+    const t0 = Date.now();
+    await post('/webhook/questpay', raw, { 'x-questpay-signature': sign(raw) });
+    await realFetch(`http://localhost:${PORT}/api/payment/verify/REF-ONE-WEEK`).then(r => r.json());
+    await post('/webhook/questpay', raw, { 'x-questpay-signature': sign(raw) });
+    await realFetch(`http://localhost:${PORT}/api/payment/verify/REF-ONE-WEEK`).then(r => r.json());
+    const mine = saved.filter(s => s.id === 'haley_like');
+    assert.equal(mine.length, 1);
+    const days = (mine[0].expiresAt - t0) / 86400000;
+    assert.ok(days > 6.99 && days < 7.01, `expected 7 days, got ${days}`);
   });
 
   await t.test('/api/generate requires a subscription and does not run the generator', async () => {

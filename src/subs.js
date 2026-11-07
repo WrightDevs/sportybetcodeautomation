@@ -1,6 +1,6 @@
 'use strict';
 const { CFG } = require('./config');
-const { getSubscriber, saveSubscriber, removeSubscriber, subCache, claimPaymentRef, releasePaymentRef } = require('./db');
+const { getSubscriber, saveSubscriber, removeSubscriber, subCache, claimPaymentRef, releasePaymentRef, isRefVoided, voidOtherCheckouts } = require('./db');
 
 function isAdmin(chatId) {
   const id = String(chatId || '').trim();
@@ -61,6 +61,11 @@ function addSubscription(chatId, days = 7, meta = {}) {
  * Returns { credited: true } or { credited: false, duplicate: true }.
  */
 async function creditPaymentOnce(chatId, reference, days, meta = {}) {
+  // A checkout voided because the same person's other checkout was already credited must not credit again
+  if (await isRefVoided(reference)) {
+    console.warn(`[payments] ref=${reference} reported paid but was voided (another checkout of the same user was credited first) - not credited; review manually if the user really paid twice`);
+    return { credited: false, duplicate: true, superseded: true };
+  }
   const fresh = await claimPaymentRef(reference, { chatId: String(chatId) });
   if (!fresh) return { credited: false, duplicate: true };
   try {
@@ -69,6 +74,7 @@ async function creditPaymentOnce(chatId, reference, days, meta = {}) {
     await releasePaymentRef(reference); // let the payment be retried
     throw e;
   }
+  try { await voidOtherCheckouts(chatId, reference); } catch (_) {} // never fail a successful credit
   return { credited: true, duplicate: false };
 }
 

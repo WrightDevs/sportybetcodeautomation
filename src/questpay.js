@@ -1,5 +1,6 @@
 'use strict';
 const { CFG } = require('./config');
+const { registerCheckout } = require('./db');
 
 const BASE_URL = (CFG.QUESTPAY_API_URL || 'https://payments-api.questlabs.cc/api').replace(/\/+$/, '');
 
@@ -50,6 +51,9 @@ async function initializeQuestPayCheckout(chatId, email = null) {
           virtualAccount = pubJ.data.business.virtualAccount;
         }
       } catch (_) {}
+
+      // Remember who this checkout was issued to so a second open checkout cannot be credited for one payment
+      try { await registerCheckout(reference, chatId); } catch (_) {}
 
       return {
         ok: true,
