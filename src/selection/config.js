@@ -71,4 +71,30 @@ const SELECTION = {
   LOG_FILE: process.env.SEL_LOG_FILE || null // null => data/selection-log.jsonl
 };
 
-module.exports = { SELECTION, MARKET_WINDOW };
+// ── Normal (pre-match) football safe selector. All overridable via FB_* env. ──
+const FOOTBALL = {
+  HORIZON_HOURS: num('FB_HORIZON_HOURS', 18),      // only matches kicking off within this window
+  MIN_LEAD_MIN: num('FB_MIN_LEAD_MIN', 15),        // skip matches starting sooner than this
+  MIN_ODDS: num('FB_MIN_ODDS', 1.03),              // de-vigged probability only reaches ~0.90 at odds ~1.03-1.05
+  MAX_ODDS: num('FB_MAX_ODDS', 1.30),
+  COHERENCE_TOL: num('FB_COHERENCE_TOL', 0.07),    // max |model - de-vigged market|
+  MAX_FIT_RMSE: num('FB_MAX_FIT_RMSE', 0.05),      // goal-model must reproduce 1X2 + totals this well
+  ALLOW_DC_12: (process.env.FB_ALLOW_DC_12 || 'off') === 'on', // "Home or Away" is not a safe shape by default
+  MIN_WIN_PROB: num('FB_MIN_WIN_PROB', 0.90),      // straight 1X2 legs
+  MIN_FALLBACK_PROB: num('FB_MIN_FALLBACK_PROB', 0.88), // No GG / Under legs (tier >= 2)
+  MIN_UNDER_LINE: num('FB_MIN_UNDER_LINE', 3.5),   // never Under a low line
+  MAX_MOVE: num('FB_MAX_MOVE', 0.05),              // drop legs whose odds moved > 5% before minting
+  LEAGUE_CAP: num('FB_LEAGUE_CAP', 2),
+  TIERS: {
+    banker: { legs: num('FB_BANKER_LEGS', 4),  minLegProb: num('FB_BANKER_MIN_PROB', 0.90), minJoint: num('FB_BANKER_MIN_JOINT', 0.60), families: ['handicap'] },
+    safe:   { legs: num('FB_SAFE_LEGS', 8),    minLegProb: num('FB_SAFE_MIN_PROB', 0.84),   minJoint: num('FB_SAFE_MIN_JOINT', 0.30),   families: ['handicap', 'nogg', 'under', 'result'] },
+    // "long" is a target-odds product (not probability-gated): kept, but labelled high risk with its true joint probability.
+    long:   { targetOdds: num('FB_LONG_TARGET_ODDS', 10), minLegProb: num('FB_LONG_MIN_PROB', 0.80), minJoint: 0, families: ['handicap', 'nogg', 'under', 'result'] }
+  },
+  TIER: { handicap: 1, dc: 1, nogg: 2, under: 3, win: 4 },
+  FAMILY: { handicap: 'handicap', dc: 'handicap', nogg: 'nogg', under: 'under', win: 'result' },
+  JUNK_LEAGUE: /(friendl|youth|reserve|u-?(1[6-9]|2[0-3])\b|women|amateur|srl|esoccer|e-football|efootball|virtual|simulated|cyber)/i,
+  LEGACY: (process.env.FB_LEGACY || 'off') === 'on'
+};
+
+module.exports = { SELECTION, MARKET_WINDOW, FOOTBALL };

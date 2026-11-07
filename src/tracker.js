@@ -199,8 +199,8 @@ function evaluateLeg(leg, eventData) {
     return { settled: true, won: isUnder ? awayScore < threshold : awayScore > threshold, score: scoreStr };
   }
 
-  // Default fallback if match ended:
-  return { settled: true, won: true, score: scoreStr };
+  // Unknown market: never count it as a win (that inflated the boom rate). Leave it unsettled.
+  return { settled: false, unknown: true, score: scoreStr };
 }
 
 /**

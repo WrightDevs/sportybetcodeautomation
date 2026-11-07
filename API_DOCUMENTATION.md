@@ -104,16 +104,22 @@ const res = await fetch('https://sportybetcodeautomation.onrender.com/api/genera
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    sport: 'football', // 'football' (~10 odds), 'efootball' (in-play), or 'vfootball'
+    sport: 'football', // 'football' (tiered safe slips), 'efootball', or 'vfootball'
     userId: user._id || user.email
   })
 });
 
 const data = await res.json();
 if (data.success && data.codes?.length > 0) {
-  const code = data.codes[0].code; // e.g. "BC7X92K"
-  const url = data.codes[0].url;   // e.g. "https://www.sportybet.com/ng/?shareCode=BC7X92K"
-  const odds = data.codes[0].odds; // e.g. 10.45
+  // Football returns up to 3 codes, one per tier: pick by `tier`, do not assume codes[0] is the ~10 odds slip.
+  const banker = data.codes.find(c => c.tier === 'banker'); // safest, low odds
+  const long = data.codes.find(c => c.tier === 'long');     // ~@10, high risk
+  const first = data.codes[0];
+  const code = first.code; // e.g. "BC7X92K"
+  const url = first.url;   // e.g. "https://www.sportybet.com/ng/?shareCode=BC7X92K"
+  const odds = first.odds; // e.g. 1.13
+} else if (!data.success && data.noSafeSlip) {
+  // Football: no tier cleared its safety bar. Show data.message (and optionally data.noSafeSlip[].reasons).
 }
 ```
 
@@ -324,17 +330,38 @@ Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direc
     {
       "code": "BC7X92K",
       "url": "https://www.sportybet.com/ng/?shareCode=BC7X92K",
-      "odds": 10.45,
-      "legsCount": 12,
-      "sport": "football"
+      "odds": 1.13,
+      "legsCount": 4,
+      "sport": "football",
+      "tier": "banker",
+      "jointProb": 0.72
+    },
+    {
+      "code": "BC8Y10M",
+      "url": "https://www.sportybet.com/ng/?shareCode=BC8Y10M",
+      "odds": 10.42,
+      "legsCount": 26,
+      "sport": "football",
+      "tier": "long",
+      "jointProb": 0.02
     }
   ],
   "lines": [
-    "BC7X92K  12 legs  @10.5\nhttps://www.sportybet.com/ng/?shareCode=BC7X92K"
+    "BANKER  BC7X92K  4 legs  @1.13  joint 72%\nhttps://www.sportybet.com/ng/?shareCode=BC7X92K",
+    "SAFE: no safe slip right now (joint probability 0.28 < 0.3)",
+    "LONG  BC8Y10M  26 legs  @10.42  joint 2%  (high risk)\nhttps://www.sportybet.com/ng/?shareCode=BC8Y10M"
   ],
   "generatedAt": "2026-11-04T15:54:00.000Z"
 }
 ```
+
+**Football changes (the route, method and request body are unchanged):**
+- `codes` holds **up to 3** items, one per tier, and is no longer a list of 50-leg chunks. Select by `tier`, not by position.
+- New optional fields on each code (football only): `tier` (`"banker"` | `"safe"` | `"long"`) and `jointProb` (0-1 estimated probability that every leg wins). `odds`, `legsCount`, `code`, `url`, `sport` keep their meaning. `efootball` / `vfootball` responses are unchanged.
+- **Banker**: ~4 legs, handicap / double chance only, low total odds (typically @1.1-1.3). **Safe**: ~8 legs. **Long**: ~@10, **high risk** (low `jointProb`), label it as such in the UI.
+- A tier that cannot clear its safety bar is simply missing from `codes`; `lines` then contains a `"<TIER>: no safe slip right now (...)"` entry. `count` equals `codes.length`.
+- Probabilities are estimates, not guarantees.
+- A fresh football run takes longer (roughly 30-90 seconds). Use a client timeout of at least 120 seconds, keep the `429 busy` handling, and prefer the 60s cache (`fresh: false`).
 
 #### No Fixtures Response (`200 OK`)
 ```json
@@ -343,6 +370,21 @@ Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direc
   "sport": "efootball",
   "count": 0,
   "message": "eFootball: nothing qualified right now. Check back shortly!"
+}
+```
+
+#### No Safe Slip Response - football (`200 OK`)
+Returned when none of the tiers cleared its safety bar. The bar is never lowered.
+```json
+{
+  "success": false,
+  "sport": "football",
+  "count": 0,
+  "message": "Football: no safe slip right now. The selector does not lower its safety bar.",
+  "noSafeSlip": [
+    { "tier": "banker", "reasons": ["only 2/4 legs passed the filters"], "refreshDropped": [] }
+  ],
+  "lines": ["BANKER: no safe slip right now (only 2/4 legs passed the filters)"]
 }
 ```
 
@@ -363,7 +405,7 @@ Returns metadata for all available sports to populate UI tabs and buttons.
       "id": "football",
       "name": "Football",
       "icon": "⚽",
-      "desc": "Real fixtures, ~10 odds accumulators"
+      "desc": "Real fixtures: Banker, Safe and Long slips built from match probabilities (handicap / double chance first)"
     },
     {
       "id": "efootball",
@@ -934,6 +976,14 @@ export interface SportyCode {
   odds: number;
   legsCount: number;
   sport: string;
+  tier?: 'banker' | 'safe' | 'long'; // football only
+  jointProb?: number;                // football only, 0-1 estimate
+}
+
+export interface NoSafeSlipTier {
+  tier: 'banker' | 'safe' | 'long';
+  reasons: string[];
+  refreshDropped: string[];
 }
 
 export interface GenerateResponse {
@@ -944,6 +994,7 @@ export interface GenerateResponse {
   codes?: SportyCode[];
   lines?: string[];
   message?: string;
+  noSafeSlip?: NoSafeSlipTier[]; // football, when no tier cleared its bar
   generatedAt?: string;
 }
 

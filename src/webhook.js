@@ -237,7 +237,7 @@ function startWebhookServer(onPaymentActivated) {
       return res.end(JSON.stringify({
         success: true,
         sports: [
-          { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures, ~10 odds accumulators' },
+          { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures: Banker, Safe and Long slips built from match probabilities (handicap / double chance first)' },
           { id: 'efootball', name: 'eFootball', icon: '🕹', desc: 'In-play matches with 3+ margin after 40′' },
           { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' },
           { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live vFootball sniper: handicap-first safe selection at 40′ (half-time) and 80′ (full-time); Under / No GG only as a stricter fallback' }
@@ -608,7 +608,10 @@ function startWebhookServer(onPaymentActivated) {
               success: false,
               sport: sportKey,
               count: 0,
-              message: `${preset.label}: nothing qualified right now. Check back shortly!`
+              message: result.noSafe && result.noSafe.length
+                ? `${preset.label}: no safe slip right now. The selector does not lower its safety bar.`
+                : `${preset.label}: nothing qualified right now. Check back shortly!`,
+              ...(result.noSafe && result.noSafe.length ? { noSafeSlip: result.noSafe, lines: result.lines || [] } : {})
             }));
           }
 

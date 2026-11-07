@@ -272,3 +272,21 @@ A slip is "high probability", never guaranteed.
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+## Normal football: tiered safe slips
+
+`src/selection/football.js` (+ `src/safe-football.js`) replaces the old "lowest odds in band" scan for the Football preset
+(`FB_LEGACY=on` restores it). For every upcoming match it fits a Poisson goal model to the de-vigged 1X2 and
+over/under ladder, prices each candidate (Handicap on the head-start side, Double Chance 1X/X2, No GG, Under 3.5+,
+straight win) and uses `min(model, de-vigged market)` as the leg probability. Legs failing the odds band, junk-league,
+coherence (`FB_COHERENCE_TOL`) or probability bars are dropped. Handicap/Double Chance are preferred; No GG, Under and
+straight wins need a stricter bar.
+
+Three tiers are built (one leg per match, no shared teams, per-league cap): **Banker** (4 legs, joint >= 0.60, handicap
+family only), **Safe** (8 legs, joint >= 0.30) and **Long** (~@10, labelled high risk with its real joint probability).
+A tier that cannot clear its bar returns "no safe slip" instead of lowering it. Odds are re-fetched right before minting
+and legs that moved more than `FB_MAX_MOVE` are dropped. Booking codes only; nothing is staked.
+
+Limits: probabilities come from market prices (no team form/injury data yet), so they cannot beat the market; the
+independent-Poisson model understates draws (the coherence check covers this); safe legs sit at odds ~1.03-1.30 so the
+Banker pays little (~@1.1-1.3). Calibrate with `npm run settle -- --report` after some days of logged slips.

@@ -202,9 +202,11 @@ async function handleSport(chat, key) {
   await send(chat, `${preset.icon} scanning ${preset.label}…`);
 
   try {
-    const { lines, count } = await generate(preset, chat);
+    const { lines, count, noSafe } = await generate(preset, chat);
     if (!count) {
-      await send(chat, `${preset.label}: nothing qualified right now. Check back shortly!`);
+      await send(chat, noSafe && noSafe.length
+        ? `${preset.label}: no safe slip right now — the system will not lower its bar.\n\n` + lines.join('\n')
+        : `${preset.label}: nothing qualified right now. Check back shortly!`);
     } else {
       await send(chat, `${preset.icon} <b>${preset.label}</b> — ${count} code(s)\n\n` + lines.join('\n\n'));
     }
