@@ -21,7 +21,8 @@ async function vetoLegs(legs, { fetchImpl = fetch, timeoutMs = SELECTION.LLM_VET
   const payload = legs.map(l => ({
     legId: String(l.eventId), match: `${l.home} v ${l.away}`, league: l.league,
     market: l.description, odds: l.odds, prob: l.prob, score: l.score, flags: l.flags,
-    state: `${l.scoreH}-${l.scoreA} @${Math.round(l.minute)}'`
+    state: `${l.scoreH}-${l.scoreA} @${Math.round(l.minute)}'`,
+    stats: l.stats || undefined
   }));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);

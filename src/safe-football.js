@@ -9,6 +9,8 @@ const { recordSlip } = require('./tracker');
 const { FOOTBALL } = require('./selection/config');
 const { selectFootball, refreshLegs, buildTierSlip } = require('./selection/football');
 const { logSlip } = require('./selection/log');
+const { analyzeLegStats } = require('./stats/analyzer');
+const { verifyLegsWithAi } = require('./stats/aiVerifier');
 
 const MARKET_IDS = ['1', '10', '14', '18', '29'];
 
@@ -38,8 +40,11 @@ const fetchEvent = async id => {
   return j?.data || null;
 };
 
-// User-facing text carries NO probabilities (the API payload keeps jointProb; see API docs).
-const legLine = l => `${l.home} v ${l.away} | ${l.desc} @${l.odds}`;
+// User-facing text carries NO raw probabilities; includes verified stats status if available.
+const legLine = l => {
+  const statsTag = l.stats?.hasStats ? ` [Stats: #${l.stats.home?.rank || '?'} vs #${l.stats.away?.rank || '?'}]` : '';
+  return `${l.home} v ${l.away} | ${l.desc} @${l.odds}${statsTag}`;
+};
 const label = name => FOOTBALL.NAMES[name] || name;
 
 // Select + mint. opts: { userId, dryRun, tiers:[...], events (inject for tests) }
@@ -49,14 +54,17 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
   const lines = [], codes = [], noSafe = [];
   const names = opts.tiers || Object.keys(sel.slips);
   const eventCache = new Map(); // shared across tiers so each match is fetched once
+  const statsCache = new Map(); // shared across tiers so each match stats is fetched/cached once
 
   for (const name of names) {
     let slip = sel.slips[name];
     if (!slip) continue;
+
+    const banned = new Set();
+    const dropNotes = [];
+
+    // 1. Live odds refresh (if not opted out)
     if (slip.ok && !opts.noRefresh) {
-      // Re-check live odds just before minting. Legs whose price moved or whose market closed are
-      // excluded and the tier is rebuilt from the remaining ranked matches (bar is never lowered).
-      const banned = new Set(), notes = [];
       let clean = false;
       for (let pass = 0; pass < 4 && slip.ok; pass++) {
         const ref = await refreshLegs(slip.legs, fetchEvent, FOOTBALL, eventCache);
@@ -66,19 +74,93 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
             jointProb: Number(ref.legs.reduce((a, l) => a * l.prob, 1).toFixed(4)) };
           const tgt = FOOTBALL.TIERS[name].targetOdds;
           if (tgt && slip.totalOdds < tgt) {
-            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [`odds drifted: @${slip.totalOdds} < target @${tgt} after refresh`], refreshDropped: notes };
+            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [`odds drifted: @${slip.totalOdds} < target @${tgt} after refresh`], refreshDropped: dropNotes };
           }
           break;
         }
-        ref.dropped.forEach(d => { banned.add(d.eventId); notes.push(`${d.home} v ${d.away}: ${d.reason}`); });
-        slip = { ...buildTierSlip(name, sel.perEvent.filter(p => !banned.has(p[0].eventId))), refreshDropped: notes };
+        ref.dropped.forEach(d => { banned.add(d.eventId); dropNotes.push(`${d.home} v ${d.away}: ${d.reason}`); });
+        slip = { ...buildTierSlip(name, sel.perEvent.filter(p => !banned.has(p[0].eventId))), refreshDropped: dropNotes };
       }
-      if (slip.ok && !clean) slip = { ...slip, ok: false, reason: 'no safe slip', reasons: ['odds kept moving during refresh'], refreshDropped: notes };
-      else if (slip.ok && notes.length) slip.refreshDropped = notes;
+      if (slip.ok && !clean) slip = { ...slip, ok: false, reason: 'no safe slip', reasons: ['odds kept moving during refresh'], refreshDropped: dropNotes };
+      else if (slip.ok && dropNotes.length) slip.refreshDropped = dropNotes;
     }
+
+    // 2. Statistical verification + AI risk audit (5DollarFootballAPI + Gemini/DeepSeek)
+    if (slip.ok && !opts.noStats) {
+      let statsClean = false;
+      for (let pass = 0; pass < 3 && slip.ok; pass++) {
+        const enriched = [];
+        for (const leg of slip.legs) {
+          const key = leg.eventId || `${leg.home}-${leg.away}`;
+          let stats = statsCache.get(key);
+          if (!stats) {
+            try {
+              stats = await analyzeLegStats(leg);
+            } catch (err) {
+              stats = { hasStats: false, reason: err.message };
+            }
+            statsCache.set(key, stats);
+          }
+          enriched.push({ ...leg, stats });
+        }
+
+        const verdicts = await verifyLegsWithAi(enriched, { timeoutMs: opts.aiTimeoutMs });
+        const verdictMap = new Map(verdicts.map(v => [String(v.legId), v]));
+
+        const rejected = [];
+        const accepted = [];
+        for (const leg of enriched) {
+          const id = String(leg.eventId || leg.id || leg.legId);
+          const v = verdictMap.get(id);
+          if (v && v.verdict === 'drop') {
+            rejected.push({ leg, reason: v.reason || 'AI/Stats rejection' });
+          } else {
+            accepted.push(leg);
+          }
+        }
+
+        if (!rejected.length) {
+          statsClean = true;
+          slip = {
+            ...slip,
+            legs: accepted,
+            totalOdds: Number(accepted.reduce((a, l) => a * l.odds, 1).toFixed(2)),
+            jointProb: Number(accepted.reduce((a, l) => a * l.prob, 1).toFixed(4))
+          };
+          const tgt = FOOTBALL.TIERS[name].targetOdds;
+          if (tgt && slip.totalOdds < tgt) {
+            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [`odds below target @${tgt} after stats audit (@${slip.totalOdds})`] };
+          }
+          break;
+        }
+
+        rejected.forEach(d => {
+          banned.add(d.leg.eventId);
+          dropNotes.push(`${d.leg.home} v ${d.leg.away} (Stats/AI): ${d.reason}`);
+        });
+
+        slip = {
+          ...buildTierSlip(name, sel.perEvent.filter(p => !banned.has(p[0].eventId))),
+          statsDropped: dropNotes
+        };
+      }
+
+      if (slip.ok && !statsClean) {
+        slip = {
+          ...slip,
+          ok: false,
+          reason: 'no safe slip',
+          reasons: ['legs repeatedly rejected by stats/AI verification'],
+          statsDropped: dropNotes
+        };
+      } else if (slip.ok && dropNotes.length) {
+        slip.statsDropped = dropNotes;
+      }
+    }
+
     if (!slip.ok) {
       // API keeps the detailed (numeric) reasons; the human-readable line is neutral.
-      noSafe.push({ tier: name, tierName: label(name), reasons: slip.reasons || [], refreshDropped: slip.refreshDropped || [] });
+      noSafe.push({ tier: name, tierName: label(name), reasons: slip.reasons || [], refreshDropped: slip.refreshDropped || [], statsDropped: slip.statsDropped || [] });
       lines.push(`${label(name)}: not available right now`);
       continue;
     }

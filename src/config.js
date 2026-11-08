@@ -57,6 +57,12 @@ const CFG = {
   ACCOUNT_NUMBER: E('ACCOUNT_NUMBER', ''),
   ACCOUNT_NAME: E('ACCOUNT_NAME', ''),
 
+  // 5DollarFootballAPI (Third-party statistics verification)
+  FOOTBALL_API_KEY: E('FOOTBALL_API_KEY', 'fb_live_dodIMepwcojrYqipEWI3NI8NPGXJWhNa'),
+  FOOTBALL_API_BASE: E('FOOTBALL_API_BASE', 'https://api.5dollarfootballapi.com/v1'),
+  FOOTBALL_API_CACHE_TTL_MS: N('FOOTBALL_API_CACHE_TTL_MS', 3 * 60 * 60 * 1000), // 3 hours
+  FOOTBALL_API_TIMEOUT_MS: N('FOOTBALL_API_TIMEOUT_MS', 15000),
+
   // MongoDB Atlas Database Connection (Zero data loss across deploys)
   MONGODB_URI: E('MONGODB_URI', E('MONGO_URL', E('DATABASE_URL', 'mongodb+srv://giftjacksun_db_user:RWSadh1hEdJrJBgX@cluster0.2rcvw7a.mongodb.net/app'))),
   MONGO_DB_NAME: E('MONGO_DB_NAME', 'app')

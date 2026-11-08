@@ -21,7 +21,7 @@
     "bot": "node bin/bot.js",
     "test-leg": "node bin/sb.js --test",
     "ping": "node bin/sb.js --ping",
-    "test": "node --test --test-force-exit test/selection.test.js test/football.test.js test/payments.test.js",
+    "test": "node --test --test-force-exit test/selection.test.js test/football.test.js test/payments.test.js test/footballStats.test.js",
     "settle": "node bin/settle.js"
   },
   "dependencies": {
