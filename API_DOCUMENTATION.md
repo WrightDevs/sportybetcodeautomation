@@ -370,7 +370,8 @@ Handle `code === "subscription_required"` by showing the upgrade / pay screen. R
       "sport": "football",
       "tier": "rookie",
       "tierName": "Rookie",
-      "jointProb": 0.72
+      "jointProb": 0.72,
+      "statsVerified": true
     },
     {
       "code": "BC8Y10M",
@@ -381,6 +382,7 @@ Handle `code === "subscription_required"` by showing the upgrade / pay screen. R
       "tier": "high_roller",
       "tierName": "High Roller",
       "jointProb": 0.04,
+      "statsVerified": true,
       "highRisk": true
     },
     {
@@ -392,6 +394,7 @@ Handle `code === "subscription_required"` by showing the upgrade / pay screen. R
       "tier": "legend",
       "tierName": "Legend",
       "jointProb": 0.003,
+      "statsVerified": true,
       "highRisk": true
     }
   ],
@@ -409,7 +412,7 @@ Handle `code === "subscription_required"` by showing the upgrade / pay screen. R
 - `codes` holds **up to 4** items, one per tier, each with **at most 50 legs**. Select by `tier`, not by position.
 - `tier` is a slug: `"rookie"` | `"hustler"` | `"high_roller"` | `"legend"`. `tierName` is the display label: `"Rookie"`, `"Hustler"`, `"High Roller"`, `"Legend"`. (Earlier drafts used banker / safe / long.)
 - **Rookie**: ~4 legs, handicap / double chance only, low total odds (typically @1.1-1.3). **Hustler**: ~8 legs. **High Roller**: about @10. **Legend**: @100 or more, up to 50 legs.
-- Optional fields on each football code: `tier`, `tierName`, `jointProb` (0-1 estimated probability that every leg wins) and `highRisk` (`true` for High Roller and Legend). `odds`, `legsCount`, `code`, `url`, `sport` keep their meaning. `efootball` / `vfootball` responses are unchanged.
+- Optional fields on each football code: `tier`, `tierName`, `jointProb` (0-1 estimated probability that every leg wins), `statsVerified` (`true` when shortlisted matches are audited against 5DollarFootballAPI live team stats and AI risk verification) and `highRisk` (`true` for High Roller and Legend). `odds`, `legsCount`, `code`, `url`, `sport` keep their meaning. `efootball` / `vfootball` responses are unchanged.
 - **Do not show `jointProb` to end users.** It stays in the API for the dashboard's own use (sorting, analytics, admin views). The `lines` strings contain no probabilities.
 - A tier that cannot be built is simply missing from `codes` (for example Legend when 50 legs cannot reach @100); `lines` then has a `"<Tier>: not available right now"` entry. `count` equals `codes.length`.
 - Probabilities are estimates, not guarantees. Legend in particular is a long shot, so keep a general disclaimer in the UI.

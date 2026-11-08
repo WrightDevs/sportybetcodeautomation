@@ -174,7 +174,8 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
     const url = r.url || `https://www.sportybet.com/${CFG.REGION}/?shareCode=${r.code}`;
     lines.push(`${label(name)}  ${r.code}  ${slip.legs.length} legs  @${slip.totalOdds}\n${url}`);
     codes.push({ code: r.code, url, odds: slip.totalOdds, legsCount: slip.legs.length, sport: 'football',
-      tier: name, tierName: label(name), jointProb: slip.jointProb, ...(slip.highRisk ? { highRisk: true } : {}) });
+      tier: name, tierName: label(name), jointProb: slip.jointProb, statsVerified: slip.legs.some(l => l.stats?.hasStats),
+      ...(slip.highRisk ? { highRisk: true } : {}) });
     try {
       recordSlip({ userId, code: r.code, sport: preset.key || 'football', totalOdds: slip.totalOdds, legs: slip.legs, url });
     } catch (e) { console.error('Failed to record slip:', e.message); }
