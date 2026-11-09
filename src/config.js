@@ -58,7 +58,7 @@ const CFG = {
   ACCOUNT_NAME: E('ACCOUNT_NAME', ''),
 
   // 5DollarFootballAPI (Third-party statistics verification)
-  FOOTBALL_API_KEY: E('FOOTBALL_API_KEY', 'fb_live_dodIMepwcojrYqipEWI3NI8NPGXJWhNa'),
+  FOOTBALL_API_KEY: E('FOOTBALL_API_KEY', ''),
   FOOTBALL_API_BASE: E('FOOTBALL_API_BASE', 'https://api.5dollarfootballapi.com/v1'),
   FOOTBALL_API_CACHE_TTL_MS: N('FOOTBALL_API_CACHE_TTL_MS', 3 * 60 * 60 * 1000), // 3 hours
   FOOTBALL_API_TIMEOUT_MS: N('FOOTBALL_API_TIMEOUT_MS', 15000),
