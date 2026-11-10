@@ -99,8 +99,11 @@ function candidatesOf(ev) {
   }
   for (const m of activeMarkets(ev, '18')) {
     const line = Number((/total=([\d.]+)/.exec(m.specifier || '') || [])[1]);
-    if (!(line >= FOOTBALL.MIN_UNDER_LINE)) continue;
-    for (const o of m.outcomes || []) if (String(o.id) === '13') push(m, o, 'under', { line });
+    for (const o of m.outcomes || []) {
+      if (line >= FOOTBALL.MIN_UNDER_LINE && String(o.id) === '13') push(m, o, 'under', { line });
+      // Over legs are only ever used by tiers that list the 'over' family, and only after the stats/AI audit.
+      if (FOOTBALL.OVER_LINES.includes(line) && String(o.id) === '12') push(m, o, 'over', { line });
+    }
   }
   for (const m of activeMarkets(ev, '1')) {
     for (const o of m.outcomes || []) if (['1', '3'].includes(String(o.id))) push(m, o, 'win');
@@ -113,6 +116,7 @@ const describe = c => {
   if (c.type === 'handicap') return `Handicap ${c.specifier.replace('hcp=', '')} ${c.outcomeId === '1711' ? 'Home' : 'Away'}`;
   if (c.type === 'nogg') return 'No GG (not both teams score)';
   if (c.type === 'under') return `Under ${c.line}`;
+  if (c.type === 'over') return `Over ${c.line}`;
   return c.outcomeId === '1' ? 'Home win' : 'Away win';
 };
 
@@ -141,7 +145,9 @@ function evaluateEvent(ev, cfg = FOOTBALL) {
     const p = Math.min(pModel, pMarket);
     const tier = cfg.TIER[c.type];
     if (c.type === 'win' && p < cfg.MIN_WIN_PROB) { rej(tag, 'straight win below MIN_WIN_PROB'); continue; }
-    if (tier >= 2 && p < cfg.MIN_FALLBACK_PROB) { rej(tag, `fallback prob ${p.toFixed(2)}<MIN_FALLBACK_PROB`); continue; }
+    if (c.type === 'over') {
+      if (p < cfg.OVER_MIN_PROB) { rej(tag, `over prob ${p.toFixed(2)}<OVER_MIN_PROB`); continue; }
+    } else if (tier >= 2 && p < cfg.MIN_FALLBACK_PROB) { rej(tag, `fallback prob ${p.toFixed(2)}<MIN_FALLBACK_PROB`); continue; }
     legs.push({
       id: ev.eventId, eventId: ev.eventId, ko: ev.ko, sport: 'football',
       home: ev.homeTeamName, away: ev.awayTeamName, league: ev.league || '',

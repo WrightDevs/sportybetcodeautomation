@@ -87,6 +87,18 @@ const FOOTBALL = {
   MIN_WIN_PROB: num('FB_MIN_WIN_PROB', 0.90),      // straight 1X2 legs
   MIN_FALLBACK_PROB: num('FB_MIN_FALLBACK_PROB', 0.88), // No GG / Under legs (tier >= 2)
   MIN_UNDER_LINE: num('FB_MIN_UNDER_LINE', 3.5),   // never Under a low line
+  // Over legs: only High Roller / Legend, only when the stats API and AI audit back them (fail-closed).
+  OVER_LINES: (process.env.FB_OVER_LINES || '0.5,1.5').split(',').map(s => Number(s.trim())).filter(n => n > 0 && n <= 1.5),
+  OVER_MIN_PROB: num('FB_OVER_MIN_PROB', 0.78),    // replaces the generic fallback bar for Over legs
+  OVER_PRESCREEN: num('FB_OVER_PRESCREEN', 8),     // max Over candidates sent to the stats API per run (free plan: 60 req/h)
+  OVER_REQUIRE_AI: (process.env.FB_OVER_REQUIRE_AI || 'on') !== 'off', // an Over also needs an explicit AI "keep"
+  OVER_STATS: {
+    minGames: num('FB_OVER_MIN_GAMES', 4),         // finished games needed for each team
+    support:    { 0.5: num('FB_OVER_SUPPORT_05', 2.0), 1.5: num('FB_OVER_SUPPORT_15', 3.0) }, // expected total goals
+    contradict: { 0.5: num('FB_OVER_CONTRA_05', 1.5),  1.5: num('FB_OVER_CONTRA_15', 2.4) },
+    supportMaxFts: num('FB_OVER_SUPPORT_FTS', 0.4),    // a team failing to score in more than this share blocks support
+    contradictFts: num('FB_OVER_CONTRA_FTS', 0.6)      // ...and this share is a contradiction
+  },
   MAX_MOVE: num('FB_MAX_MOVE', 0.05),              // drop legs whose odds moved > 5% before minting
   LEAGUE_CAP: num('FB_LEAGUE_CAP', 2),
   MAX_LEGS: num('FB_MAX_LEGS', 50),                // hard cap on legs per slip, every tier
@@ -95,12 +107,12 @@ const FOOTBALL = {
     rookie:      { legs: num('FB_ROOKIE_LEGS', 4),  minLegProb: num('FB_ROOKIE_MIN_PROB', 0.90),  minJoint: num('FB_ROOKIE_MIN_JOINT', 0.60),  families: ['handicap'] },
     hustler:     { legs: num('FB_HUSTLER_LEGS', 8), minLegProb: num('FB_HUSTLER_MIN_PROB', 0.84), minJoint: num('FB_HUSTLER_MIN_JOINT', 0.30), families: ['handicap', 'nogg', 'under', 'result'] },
     // Target-odds tiers are not probability-gated: they stop at the target odds (or MAX_LEGS) and are flagged highRisk.
-    high_roller: { targetOdds: num('FB_HIGH_ROLLER_TARGET_ODDS', 10), minLegProb: num('FB_HIGH_ROLLER_MIN_PROB', 0.80), minJoint: 0, highRisk: true, leagueCap: num('FB_HIGH_ROLLER_LEAGUE_CAP', 3), families: ['handicap', 'nogg', 'under', 'result'] },
-    legend:     { targetOdds: num('FB_LEGEND_TARGET_ODDS', 100), minLegProb: num('FB_LEGEND_MIN_PROB', 0.70), maxLegOdds: num('FB_LEGEND_MAX_LEG_ODDS', 1.40), leagueCap: num('FB_LEGEND_LEAGUE_CAP', 4), minJoint: 0, highRisk: true, families: ['handicap', 'nogg', 'under', 'result'] }
+    high_roller: { targetOdds: num('FB_HIGH_ROLLER_TARGET_ODDS', 10), minLegProb: num('FB_HIGH_ROLLER_MIN_PROB', 0.80), minJoint: 0, highRisk: true, leagueCap: num('FB_HIGH_ROLLER_LEAGUE_CAP', 3), families: ['handicap', 'nogg', 'under', 'result', 'over'] },
+    legend:     { targetOdds: num('FB_LEGEND_TARGET_ODDS', 100), minLegProb: num('FB_LEGEND_MIN_PROB', 0.70), maxLegOdds: num('FB_LEGEND_MAX_LEG_ODDS', 1.40), leagueCap: num('FB_LEGEND_LEAGUE_CAP', 4), minJoint: 0, highRisk: true, families: ['handicap', 'nogg', 'under', 'result', 'over'] }
   },
   NAMES: { rookie: 'Rookie', hustler: 'Hustler', high_roller: 'High Roller', legend: 'Legend' },
-  TIER: { handicap: 1, dc: 1, nogg: 2, under: 3, win: 4 },
-  FAMILY: { handicap: 'handicap', dc: 'handicap', nogg: 'nogg', under: 'under', win: 'result' },
+  TIER: { handicap: 1, dc: 1, nogg: 2, under: 3, over: 3, win: 4 },
+  FAMILY: { handicap: 'handicap', dc: 'handicap', nogg: 'nogg', under: 'under', over: 'over', win: 'result' },
   JUNK_LEAGUE: /(friendl|youth|reserve|u-?(1[6-9]|2[0-3])\b|women|amateur|srl|esoccer|e-football|efootball|virtual|simulated|cyber)/i,
   LEGACY: (process.env.FB_LEGACY || 'off') === 'on'
 };

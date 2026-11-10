@@ -197,6 +197,82 @@ test('slip text for users carries no probabilities, but the payload keeps jointP
   for (const c of r.codes) assert.ok(typeof c.jointProb === 'number' && c.tierName);
 });
 
+// ── Over legs: only High Roller / Legend, only when stats + AI back them ──
+test('Over 0.5 / 1.5 are candidates, other Over lines are not', () => {
+  const ev = makeEvent('e1', 'A', 'B', 1.9, 1.3);
+  const overs = F.candidatesOf(ev).filter(c => c.type === 'over');
+  assert.deepStrictEqual(overs.map(c => c.line).sort(), [0.5, 1.5]);
+  assert.ok(overs.every(c => c.marketId === '18' && c.outcomeId === '12'));
+});
+
+test('Over legs are priced (not rejected as unmodelled) and use the Over probability bar', () => {
+  const ev = makeEvent('e1', 'A', 'B', 2.0, 1.6);
+  const { legs } = F.evaluateEvent(ev, { ...FOOTBALL, MAX_ODDS: 1.6 });
+  const over = legs.filter(l => l.type === 'over');
+  assert.ok(over.length > 0, 'an Over leg should survive');
+  assert.ok(over.every(l => l.family === 'over' && l.prob >= FOOTBALL.OVER_MIN_PROB && /^Over /.test(l.desc)));
+});
+
+test('Over family is allowed in High Roller and Legend only', () => {
+  assert.ok(FOOTBALL.TIERS.high_roller.families.includes('over'));
+  assert.ok(FOOTBALL.TIERS.legend.families.includes('over'));
+  assert.ok(!FOOTBALL.TIERS.rookie.families.includes('over'));
+  assert.ok(!FOOTBALL.TIERS.hustler.families.includes('over'));
+  const ov = leg(1, 0.9, 1.1, { type: 'over', family: 'over', line: 1.5 });
+  assert.strictEqual(F.buildTierSlip('rookie', [[ov], [ov], [ov], [ov]]).legs.length, 0);
+});
+
+test('screenOvers keeps only Overs the stats strongly support; others vanish, other legs stay', async () => {
+  const sf = require('../src/safe-football');
+  const mkOver = (i, line = 1.5) => leg(i, 0.82, 1.22, { type: 'over', family: 'over', line, desc: `Over ${line}`, marketId: '18', outcomeId: '12', specifier: `total=${line}` });
+  const pe = [[mkOver(1), leg(1, 0.9, 1.08)], [mkOver(2)], [mkOver(3)], [leg(4, 0.9, 1.08)]];
+  const verdict = { e1: 'STRONG_SUPPORT', e2: 'MODERATE_SUPPORT' }; // e3: no stats at all
+  const analyze = async l => verdict[l.eventId] ? { hasStats: true, alignment: verdict[l.eventId], summary: 's' } : { hasStats: false, reason: 'league not covered' };
+  const r = await sf.screenOvers(pe, new Map(), { analyze });
+  const flat = r.perEvent.flat();
+  assert.deepStrictEqual(flat.filter(l => l.type === 'over').map(l => l.eventId), ['e1']);
+  assert.ok(flat.some(l => l.eventId === 'e1' && l.type === 'dc'), 'the match keeps its other leg');
+  assert.ok(flat.some(l => l.eventId === 'e4'));
+  assert.strictEqual(r.perEvent.length, 2); // e2 and e3 had only an Over, so those matches are gone (e1 and e4 remain)
+  assert.strictEqual(r.screen.accepted, 1);
+});
+
+test('screenOvers: stats disabled or over the check limit means no unverified Over gets through', async () => {
+  const sf = require('../src/safe-football');
+  const mkOver = i => leg(i, 0.82, 1.22, { type: 'over', family: 'over', line: 1.5, marketId: '18', outcomeId: '12' });
+  const pe = Array.from({ length: 12 }, (_, i) => [mkOver(i)]);
+  const off = await sf.screenOvers(pe, new Map(), { noStats: true });
+  assert.strictEqual(off.perEvent.length, 0);
+  let calls = 0;
+  const analyze = async () => { calls++; return { hasStats: true, alignment: 'STRONG_SUPPORT', summary: 's' }; };
+  const lim = await sf.screenOvers(pe, new Map(), { analyze });
+  assert.strictEqual(calls, FOOTBALL.OVER_PRESCREEN);
+  assert.strictEqual(lim.perEvent.length, FOOTBALL.OVER_PRESCREEN);
+});
+
+test('an Over needs an explicit AI keep: a missing or heuristic verdict drops it, an AI drop drops it', async () => {
+  const sf = require('../src/safe-football');
+  // Only 1X2 + totals, so the only usable legs are Over legs; distinct leagues so the league cap does not interfere.
+  const events = Array.from({ length: 70 }, (_, i) => {
+    const e = makeEvent(`e${i}`, `Home${i}`, `Away${i}`, 2.0, 1.6, `League ${i}`);
+    return { ...e, markets: e.markets.filter(m => m.id === '1' || m.id === '18') };
+  });
+  const analyze = async l => ({ hasStats: true, alignment: l.type === 'over' ? 'STRONG_SUPPORT' : 'MODERATE_SUPPORT', summary: 's' });
+  const run = verdictFor => sf.generateSafeFootball({}, null, { events, dryRun: true, noRefresh: true, analyze,
+    verify: async legs => legs.map(l => ({ legId: String(l.eventId), verdict: verdictFor(l).verdict, source: verdictFor(l).source, reason: 'r' })) });
+  const hasOver = r => r.codes.some(c => (c.legs || []).some(l => l.type === 'over'));
+  const heuristic = await run(() => ({ verdict: 'keep', source: 'heuristic' }));
+  assert.ok(!hasOver(heuristic), 'no Over without an explicit AI keep');
+  const dropped = await run(l => ({ verdict: l.type === 'over' ? 'drop' : 'keep', source: 'llm' }));
+  assert.ok(!hasOver(dropped), 'AI drop removes Overs');
+  const prescreen = FOOTBALL.OVER_PRESCREEN;
+  FOOTBALL.OVER_PRESCREEN = 70; // lift the per-run API budget so a slip made only of Overs can reach its target
+  let kept;
+  try { kept = await run(() => ({ verdict: 'keep', source: 'llm' })); } finally { FOOTBALL.OVER_PRESCREEN = prescreen; }
+  assert.ok(hasOver(kept), 'with stats support and an explicit AI keep, Over legs are used');
+  assert.ok(kept.codes.every(c => c.tier === 'high_roller' || c.tier === 'legend'), 'Overs appear in no other tier');
+});
+
 test('refreshLegs drops moved or closed legs and keeps stable ones', async () => {
   const legs = [leg(1, 0.9, 1.10), leg(2, 0.9, 1.10), leg(3, 0.9, 1.10)];
   const mk = odds => ({ markets: [{ id: 10, specifier: '', status: 0, outcomes: [{ id: '9', odds: String(odds), isActive: 1 }] }] });

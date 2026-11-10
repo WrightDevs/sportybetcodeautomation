@@ -16,6 +16,7 @@ function sanitizeVerdicts(raw, legs) {
     out.push({
       legId: String(v.legId),
       verdict: v.verdict === 'drop' ? 'drop' : 'keep',
+      source: 'llm', // an explicit answer from the model (the fallback path marks 'heuristic')
       confidence: typeof v.confidence === 'number' ? Math.max(0, Math.min(1, v.confidence)) : 0.85,
       reason: String(v.reason || '').slice(0, 250)
     });
@@ -37,6 +38,7 @@ async function verifyLegsWithAi(legs, options = {}) {
     return {
       legId: String(l.eventId || l.id || l.legId),
       verdict: isContradicted ? 'drop' : 'keep',
+      source: 'heuristic',
       confidence: isContradicted ? 0.3 : 0.85,
       reason: isContradicted ? `Heuristic statistical contradiction: ${l.stats.summary}` : 'Stats verified'
     };
@@ -81,7 +83,8 @@ async function verifyLegsWithAi(legs, options = {}) {
           {
             role: 'user',
             content: `Audit the following shortlisted legs against their verified team statistics. `
-              + `Drop any pick that is statistically contradicted (e.g. poor form on favorite, high goal expectation on Under pick, weak defense). `
+              + `Drop any pick that is statistically contradicted (e.g. poor form on favorite, high goal expectation on Under pick, weak defense, `
+              + `an Over pick where either team often fails to score or the combined goal expectation is low). `
               + `Keep picks that are strongly corroborated by the statistics:\n${JSON.stringify(payload, null, 2)}`
           }
         ]

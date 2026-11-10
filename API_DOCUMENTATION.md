@@ -1417,3 +1417,40 @@ export function TelegramLoginButton({
 }
 ```
 
+
+---
+
+## Football: stats-verified leagues and Over legs
+
+**No route, method, request or response shape changed.** This section only adds information the dashboard can display.
+
+### Where matches come from, and which leagues are stats-verified
+The football generator scans **every upcoming SportyBet football match** in the next ~18 hours (friendlies, youth, reserve, women's, virtual and e-football competitions are excluded). Each match is priced from the bookmaker odds.
+
+A subset of matches is additionally audited against live team statistics (league table, points per game, last 5 results) from the 5DollarFootballAPI. These are the **stats-verified leagues**:
+
+| Display name | Country |
+|---|---|
+| Premier League | England |
+| La Liga | Spain |
+| Serie A | Italy |
+| Bundesliga | Germany |
+| Ligue 1 | France |
+
+A generated code has `"statsVerified": true` when at least one of its legs is in one of these leagues and was audited. Matches from other leagues are still used; they are simply not stats-audited.
+
+Display guidance: show these five leagues as "Stats-verified leagues" (for example a small badge row near the Football generator) and show a "Stats verified" badge on a code card when `statsVerified` is `true`. Do not imply that other leagues are excluded or that the five leagues are the only source of matches.
+
+### Over legs (High Roller and Legend only)
+High Roller and Legend may include **Over 0.5** or **Over 1.5** legs. An Over is only included when:
+1. the stats audit shows strong scoring form for both teams (so Overs can only come from the five stats-verified leagues), and
+2. the AI risk audit explicitly confirms it.
+
+If either check cannot be completed (league not covered, stats unavailable, AI unavailable), the Over is left out and the slip is built from other legs. Rookie and Hustler never contain Overs. Codes do not list their legs in `/api/generate`; the "Over" wording only matters for descriptive UI copy.
+
+### Longer generation time
+Because of the stats and AI checks, a football generation can take longer than before. Keep the request timeout at **180 seconds or more** and show a progress state. Handle HTTP 429 (busy) as before.
+
+### Payment behaviour (applies to web and Telegram)
+- A user can have several open checkouts (for example one started in Telegram and one on the dashboard). **Only the first one reported as paid is credited**; the user's other open checkouts are voided and return `alreadyCredited: true`. Always show and verify the most recently created `reference`, and create a new checkout for every new payment.
+- A repeated `GET /api/payment/verify/:reference` call is safe and never extends the subscription twice.

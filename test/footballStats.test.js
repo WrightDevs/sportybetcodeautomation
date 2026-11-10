@@ -109,6 +109,45 @@ test('verifyLegsWithAi automatically drops STAT_CONTRADICTION legs even without 
   assert.match(verdicts[1].reason, /statistical contradiction/i);
 });
 
+test('Over rule: strong support needs scoring form on both sides, thin history is never enough', async () => {
+  const { setCache, clearCache } = require('../src/stats/footballApi');
+  clearCache();
+  const table = [
+    { position: 3, played: 20, points: 38, goal_difference: 10, team: { id: 301, name: 'Arsenal' } },
+    { position: 8, played: 20, points: 28, goal_difference: 2, team: { id: 302, name: 'Brighton' } }
+  ];
+  setCache('req:https://api.5dollarfootballapi.com/v1/standings?league=4160026622', { table });
+  const games = (id, results) => results.map(([h, a, home]) => ({
+    status: 'finished', teams: { home: { id: home ? id : 999 }, away: { id: home ? 999 : id } }, goals: { home: h, away: a } }));
+  const fx = id => `req:https://api.5dollarfootballapi.com/v1/teams/${id}/fixtures`;
+  const over15 = { eventId: 'o1', home: 'Arsenal', away: 'Brighton', league: 'Premier League', marketId: '18', outcomeId: '12',
+    type: 'over', line: 1.5, specifier: 'total=1.5', desc: 'Over 1.5', odds: 1.25 };
+
+  // both teams score and concede plenty -> expected ~3.4
+  setCache(fx(301), games(301, [[3, 1, true], [2, 2, false], [2, 1, true], [3, 0, true], [1, 2, false]]));
+  setCache(fx(302), games(302, [[2, 2, true], [1, 3, false], [2, 1, true], [1, 2, false], [2, 2, true]]));
+  const strong = await analyzeLegStats(over15);
+  assert.strictEqual(strong.alignment, 'STRONG_SUPPORT');
+  assert.ok(strong.expectedTotal >= 3.0);
+
+  // goal-shy teams -> contradiction
+  setCache(fx(301), games(301, [[0, 0, true], [1, 0, false], [0, 1, true], [0, 0, true], [1, 0, false]]));
+  setCache(fx(302), games(302, [[0, 1, true], [0, 0, false], [1, 0, true], [0, 0, false], [0, 0, true]]));
+  assert.strictEqual((await analyzeLegStats(over15)).alignment, 'STAT_CONTRADICTION');
+
+  // middling numbers -> not enough for an Over
+  setCache(fx(301), games(301, [[2, 1, true], [1, 1, false], [1, 0, true], [2, 1, true], [1, 1, false]]));
+  setCache(fx(302), games(302, [[1, 1, true], [1, 2, false], [1, 0, true], [2, 1, false], [1, 1, true]]));
+  const mid = await analyzeLegStats(over15);
+  assert.notStrictEqual(mid.alignment, 'STRONG_SUPPORT');
+
+  // only 2 finished games each -> never strong
+  setCache(fx(301), games(301, [[3, 1, true], [2, 2, false]]));
+  setCache(fx(302), games(302, [[2, 2, true], [1, 3, false]]));
+  assert.notStrictEqual((await analyzeLegStats(over15)).alignment, 'STRONG_SUPPORT');
+  clearCache();
+});
+
 test('footballApi caching preserves entries within TTL and clears on request', () => {
   const { setCache, getCached, clearCache } = require('../src/stats/footballApi');
   clearCache();

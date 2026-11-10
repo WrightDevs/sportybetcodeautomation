@@ -47,6 +47,55 @@ const legLine = l => {
 };
 const label = name => FOOTBALL.NAMES[name] || name;
 
+const legKey = l => `${l.eventId}|${l.marketId}|${l.outcomeId}|${l.specifier || ''}`;
+// Stats depend on the pick type (an Over is judged differently from a handicap), so the cache key includes it.
+const statsKey = l => `${l.eventId || `${l.home}-${l.away}`}|${l.type}|${l.line ?? ''}`;
+const oddsPerRisk = l => Math.log(l.odds) / Math.max(1e-9, -Math.log(Math.min(0.9999, l.prob)));
+
+async function statsFor(leg, statsCache, analyze = analyzeLegStats) {
+  const key = statsKey(leg);
+  let stats = statsCache.get(key);
+  if (!stats) {
+    try { stats = await analyze(leg); } catch (err) { stats = { hasStats: false, reason: err.message }; }
+    statsCache.set(key, stats);
+  }
+  return stats;
+}
+
+/**
+ * Over legs are fail-closed: one is only allowed into a slip if the stats API shows STRONG_SUPPORT for it.
+ * Only the best Over per match, and at most OVER_PRESCREEN matches, are checked (free plan: 60 requests/hour);
+ * every other Over is removed so the tier builders only ever see verified ones.
+ * Returns { perEvent, screen } where screen reports what happened (for logs / dry runs).
+ */
+async function screenOvers(perEvent, statsCache, opts = {}, cfg = FOOTBALL) {
+  const best = [];
+  for (const legs of perEvent) {
+    const overs = legs.filter(l => l.type === 'over');
+    if (overs.length) best.push(overs.reduce((b, x) => (oddsPerRisk(x) > oddsPerRisk(b) ? x : b)));
+  }
+  const screen = { candidates: best.length, checked: 0, accepted: 0, notes: [] };
+  if (!best.length) return { perEvent, screen };
+
+  const allowed = new Set();
+  if (opts.noStats) {
+    screen.notes.push('stats check disabled: no Over legs used');
+  } else {
+    best.sort((a, b) => oddsPerRisk(b) - oddsPerRisk(a));
+    for (const leg of best.slice(0, cfg.OVER_PRESCREEN)) {
+      const stats = await statsFor(leg, statsCache, opts.analyze);
+      screen.checked++;
+      if (stats.hasStats && stats.alignment === 'STRONG_SUPPORT') { allowed.add(legKey(leg)); screen.accepted++; }
+      else screen.notes.push(`${leg.home} v ${leg.away} ${leg.desc}: ${stats.hasStats ? `${stats.alignment} - ${stats.summary}` : `no stats (${stats.reason})`}`);
+    }
+    if (best.length > cfg.OVER_PRESCREEN) screen.notes.push(`${best.length - cfg.OVER_PRESCREEN} further Over candidates not checked (limit ${cfg.OVER_PRESCREEN})`);
+  }
+  const filtered = perEvent
+    .map(legs => legs.filter(l => l.type !== 'over' || allowed.has(legKey(l))))
+    .filter(legs => legs.length);
+  return { perEvent: filtered, screen };
+}
+
 // Select + mint. opts: { userId, dryRun, tiers:[...], events (inject for tests) }
 async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
   const events = opts.events || await fetchUpcoming();
@@ -56,11 +105,23 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
   const eventCache = new Map(); // shared across tiers so each match is fetched once
   const statsCache = new Map(); // shared across tiers so each match stats is fetched/cached once
 
+  // Verify Over legs with the stats API first; slips are then (re)built from the verified pool only.
+  const screened = await screenOvers(sel.perEvent, statsCache, opts);
+  const perEvent = screened.perEvent;
+  if (screened.screen.candidates) {
+    for (const name of Object.keys(sel.slips)) sel.slips[name] = buildTierSlip(name, perEvent);
+    console.log(`[football] Over screen: ${screened.screen.accepted}/${screened.screen.candidates} accepted${screened.screen.notes.length ? '\n  ' + screened.screen.notes.join('\n  ') : ''}`);
+  }
+
   for (const name of names) {
     let slip = sel.slips[name];
     if (!slip) continue;
 
-    const banned = new Set();
+    const banned = new Set();       // whole matches that failed a check
+    const bannedLegs = new Set();   // single legs (an Over that failed) - the match's other legs stay usable
+    const view = () => perEvent
+      .map(legs => legs.filter(l => !bannedLegs.has(legKey(l))))
+      .filter(legs => legs.length && !banned.has(legs[0].eventId));
     const dropNotes = [];
 
     // 1. Live odds refresh (if not opted out)
@@ -79,7 +140,7 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
           break;
         }
         ref.dropped.forEach(d => { banned.add(d.eventId); dropNotes.push(`${d.home} v ${d.away}: ${d.reason}`); });
-        slip = { ...buildTierSlip(name, sel.perEvent.filter(p => !banned.has(p[0].eventId))), refreshDropped: dropNotes };
+        slip = { ...buildTierSlip(name, view()), refreshDropped: dropNotes };
       }
       if (slip.ok && !clean) slip = { ...slip, ok: false, reason: 'no safe slip', reasons: ['odds kept moving during refresh'], refreshDropped: dropNotes };
       else if (slip.ok && dropNotes.length) slip.refreshDropped = dropNotes;
@@ -91,20 +152,11 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
       for (let pass = 0; pass < 3 && slip.ok; pass++) {
         const enriched = [];
         for (const leg of slip.legs) {
-          const key = leg.eventId || `${leg.home}-${leg.away}`;
-          let stats = statsCache.get(key);
-          if (!stats) {
-            try {
-              stats = await analyzeLegStats(leg);
-            } catch (err) {
-              stats = { hasStats: false, reason: err.message };
-            }
-            statsCache.set(key, stats);
-          }
-          enriched.push({ ...leg, stats });
+          enriched.push({ ...leg, stats: await statsFor(leg, statsCache, opts.analyze) });
         }
 
-        const verdicts = await verifyLegsWithAi(enriched, { timeoutMs: opts.aiTimeoutMs });
+        const verifier = opts.verify || verifyLegsWithAi;
+        const verdicts = await verifier(enriched, { timeoutMs: opts.aiTimeoutMs });
         const verdictMap = new Map(verdicts.map(v => [String(v.legId), v]));
 
         const rejected = [];
@@ -112,6 +164,18 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
         for (const leg of enriched) {
           const id = String(leg.eventId || leg.id || leg.legId);
           const v = verdictMap.get(id);
+          if (leg.type === 'over') {
+            // Fail-closed: needs strong stats support AND an explicit AI keep (unless AI is switched off for Overs).
+            const strong = leg.stats?.hasStats && leg.stats.alignment === 'STRONG_SUPPORT';
+            const aiKeep = !FOOTBALL.OVER_REQUIRE_AI || (v && v.verdict === 'keep' && v.source === 'llm');
+            if (!strong || !aiKeep) {
+              const why = !strong ? 'stats do not strongly support the Over' : (v && v.verdict === 'drop' ? (v.reason || 'AI dropped the Over') : 'no AI confirmation for the Over');
+              rejected.push({ leg, reason: why, legOnly: true });
+              continue;
+            }
+            accepted.push(leg);
+            continue;
+          }
           if (v && v.verdict === 'drop') {
             rejected.push({ leg, reason: v.reason || 'AI/Stats rejection' });
           } else {
@@ -135,12 +199,12 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
         }
 
         rejected.forEach(d => {
-          banned.add(d.leg.eventId);
+          if (d.legOnly) bannedLegs.add(legKey(d.leg)); else banned.add(d.leg.eventId);
           dropNotes.push(`${d.leg.home} v ${d.leg.away} (Stats/AI): ${d.reason}`);
         });
 
         slip = {
-          ...buildTierSlip(name, sel.perEvent.filter(p => !banned.has(p[0].eventId))),
+          ...buildTierSlip(name, view()),
           statsDropped: dropNotes
         };
       }
@@ -185,4 +249,4 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
   return { lines, codes, count: codes.filter(c => c.code).length, noSafe, considered: sel.considered, eventsScanned: sel.eventsScanned };
 }
 
-module.exports = { generateSafeFootball, fetchUpcoming };
+module.exports = { generateSafeFootball, fetchUpcoming, screenOvers };

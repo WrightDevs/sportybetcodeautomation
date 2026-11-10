@@ -7,6 +7,7 @@
 
 const { getStandings, getTeamFixtures } = require('./footballApi');
 const { matchLeague, matchTeamInStandings } = require('./teamMatcher');
+const { FOOTBALL } = require('../selection/config');
 
 /**
  * Extract form points from recent finished fixtures (last N games)
@@ -190,9 +191,40 @@ async function analyzeLegStats(leg) {
     }
   }
 
+  // 5. Over 0.5 / Over 1.5: needs real scoring form on BOTH sides. Anything short of clear support stays NEUTRAL,
+  // and the caller only accepts an Over on STRONG_SUPPORT.
+  let expectedTotal = null;
+  if (type === 'over') {
+    const cfgO = FOOTBALL.OVER_STATS;
+    const line = Number(leg.line);
+    const enough = (homeForm.sampleSize || 0) >= cfgO.minGames && (awayForm.sampleSize || 0) >= cfgO.minGames;
+    if (!enough) {
+      alignment = 'NEUTRAL';
+      confidenceScore = 50;
+      notes.push(`Over ${line}: not enough recent games (home ${homeForm.sampleSize || 0}, away ${awayForm.sampleSize || 0}, need ${cfgO.minGames})`);
+    } else {
+      expectedTotal = parseFloat((((homeForm.avgGoals + awayForm.avgConceded) / 2) + ((awayForm.avgGoals + homeForm.avgConceded) / 2)).toFixed(2));
+      const maxFts = Math.max(homeForm.failedToScore || 0, awayForm.failedToScore || 0);
+      const sup = cfgO.support[line], con = cfgO.contradict[line];
+      if (sup === undefined || con === undefined) {
+        alignment = 'NEUTRAL'; confidenceScore = 50; notes.push(`Over ${line}: no stats rule for this line`);
+      } else if (expectedTotal < con || maxFts >= cfgO.contradictFts) {
+        alignment = 'STAT_CONTRADICTION'; confidenceScore = 35;
+        notes.push(`Over ${line} contradicted: expected ${expectedTotal} goals/match, worst fail-to-score rate ${Math.round(maxFts * 100)}%`);
+      } else if (expectedTotal >= sup && maxFts <= cfgO.supportMaxFts) {
+        alignment = 'STRONG_SUPPORT'; confidenceScore = 88;
+        notes.push(`Over ${line} backed: expected ${expectedTotal} goals/match (home ${homeForm.avgGoals} scored / ${homeForm.avgConceded} conceded, away ${awayForm.avgGoals} / ${awayForm.avgConceded})`);
+      } else {
+        alignment = 'MODERATE_SUPPORT'; confidenceScore = 70;
+        notes.push(`Over ${line}: expected ${expectedTotal} goals/match is not convincing`);
+      }
+    }
+  }
+
   return {
     hasStats: true,
     alignment,
+    expectedTotal,
     confidenceScore,
     home: {
       name: homeEntry.team.name,
