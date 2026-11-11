@@ -7,18 +7,19 @@ const { sleep } = require('./util');
 const { mint } = require('./mint');
 const { recordSlip } = require('./tracker');
 const { FOOTBALL } = require('./selection/config');
-const { selectFootball, refreshLegs, buildTierSlip } = require('./selection/football');
+const { selectFootball, refreshLegs, buildTierSlip, oddsBand } = require('./selection/football');
 const { logSlip } = require('./selection/log');
 const { analyzeLegStats } = require('./stats/analyzer');
 const { verifyLegsWithAi } = require('./stats/aiVerifier');
 
 const MARKET_IDS = ['1', '10', '14', '18', '29'];
 
-async function fetchUpcoming(cfg = FOOTBALL) {
+// horizonHours (optional) widens the window for tiers that need many matches (Tycoon / Moonshot).
+async function fetchUpcoming(cfg = FOOTBALL, horizonHours = cfg.HORIZON_HOURS) {
   const now = Date.now();
-  const hi = now + cfg.HORIZON_HOURS * 36e5;
+  const hi = now + horizonHours * 36e5;
   const lo = now + cfg.MIN_LEAD_MIN * 60000;
-  const hours = Math.max(1, Math.ceil(cfg.HORIZON_HOURS));
+  const hours = Math.max(1, Math.ceil(horizonHours));
   const seen = new Map();
   for (let page = 1; page <= 30; page++) {
     const j = await get(`${API}/factsCenter/pcUpcomingEvents?sportId=sr:sport:1&marketId=${MARKET_IDS.join(',')}`
@@ -96,17 +97,29 @@ async function screenOvers(perEvent, statsCache, opts = {}, cfg = FOOTBALL) {
   return { perEvent: filtered, screen };
 }
 
+// A slip is only valid inside its tier's total-odds band: [targetOdds, maxTotalOdds].
+const bandReason = (name, totalOdds, stage) => {
+  const { min, max } = oddsBand(name);
+  if (totalOdds < min) return `${stage}: @${totalOdds} below target @${min}`;
+  if (totalOdds > max) return `${stage}: @${totalOdds} above ceiling @${max}`;
+  return null;
+};
+
 // Select + mint. opts: { userId, dryRun, tiers:[...], events (inject for tests) }
+// opts.tiers limits the run to the tiers the user asked for (default: every tier).
 async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
-  const events = opts.events || await fetchUpcoming();
-  const sel = selectFootball(events);
+  const names = (opts.tiers && opts.tiers.length ? opts.tiers : Object.keys(FOOTBALL.TIERS)).filter(n => FOOTBALL.TIERS[n]);
+  const horizon = Math.max(FOOTBALL.HORIZON_HOURS, ...names.map(n => FOOTBALL.TIERS[n].horizonHours || 0));
+  const events = opts.events || await fetchUpcoming(FOOTBALL, horizon);
+  const sel = selectFootball(events, FOOTBALL, names);
   const lines = [], codes = [], noSafe = [];
-  const names = opts.tiers || Object.keys(sel.slips);
   const eventCache = new Map(); // shared across tiers so each match is fetched once
   const statsCache = new Map(); // shared across tiers so each match stats is fetched/cached once
 
   // Verify Over legs with the stats API first; slips are then (re)built from the verified pool only.
-  const screened = await screenOvers(sel.perEvent, statsCache, opts);
+  // Skipped when no requested tier can use an Over, so the stats budget goes to the tier the user chose.
+  const usesOver = names.some(n => FOOTBALL.TIERS[n].families.includes('over'));
+  const screened = usesOver ? await screenOvers(sel.perEvent, statsCache, opts) : { perEvent: sel.perEvent, screen: { candidates: 0 } };
   const perEvent = screened.perEvent;
   if (screened.screen.candidates) {
     for (const name of Object.keys(sel.slips)) sel.slips[name] = buildTierSlip(name, perEvent);
@@ -133,9 +146,9 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
           clean = true;
           slip = { ...slip, legs: ref.legs, totalOdds: Number(ref.legs.reduce((a, l) => a * l.odds, 1).toFixed(2)),
             jointProb: Number(ref.legs.reduce((a, l) => a * l.prob, 1).toFixed(4)) };
-          const tgt = FOOTBALL.TIERS[name].targetOdds;
-          if (tgt && slip.totalOdds < tgt) {
-            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [`odds drifted: @${slip.totalOdds} < target @${tgt} after refresh`], refreshDropped: dropNotes };
+          const outOfBand = bandReason(name, slip.totalOdds, 'odds drifted after refresh');
+          if (outOfBand) {
+            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [outOfBand], refreshDropped: dropNotes };
           }
           break;
         }
@@ -191,9 +204,9 @@ async function generateSafeFootball(preset = {}, userId = null, opts = {}) {
             totalOdds: Number(accepted.reduce((a, l) => a * l.odds, 1).toFixed(2)),
             jointProb: Number(accepted.reduce((a, l) => a * l.prob, 1).toFixed(4))
           };
-          const tgt = FOOTBALL.TIERS[name].targetOdds;
-          if (tgt && slip.totalOdds < tgt) {
-            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [`odds below target @${tgt} after stats audit (@${slip.totalOdds})`] };
+          const outOfBand = bandReason(name, slip.totalOdds, 'after stats audit');
+          if (outOfBand) {
+            slip = { ...slip, ok: false, reason: 'no safe slip', reasons: [outOfBand] };
           }
           break;
         }

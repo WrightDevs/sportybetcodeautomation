@@ -7,6 +7,7 @@ const { addSubscription, creditPaymentOnce, getSubscription, isSubscribed } = re
 const { getSubscriber, findUser } = require('./db');
 const { getGlobalStats, getUserStats, loadSlips } = require('./tracker');
 const { generate } = require('./run');
+const { resolveTiers } = require('./selection/football');
 const { PRESETS } = require('./presets');
 const { API, HDR, get } = require('./api');
 const {
@@ -250,7 +251,7 @@ function startWebhookServer(onPaymentActivated) {
       return res.end(JSON.stringify({
         success: true,
         sports: [
-          { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures: Rookie, Hustler, High Roller and Legend slips (handicap / double chance first)' },
+          { id: 'football', name: 'Football', icon: '⚽', desc: 'Real fixtures: pick a tier (Rookie, Hustler, High Roller, Legend, Tycoon or Moonshot) or get them all' },
           { id: 'efootball', name: 'eFootball', icon: '🕹', desc: 'In-play matches with 3+ margin after 40′' },
           { id: 'vfootball', name: 'vFootball', icon: '⚡', desc: 'Virtual football rapid 3-minute rounds' },
           { id: 'quest_special', name: 'Quest Special', icon: '🎯', desc: 'Live vFootball sniper: handicap-first safe selection at 40′ (half-time) and 80′ (full-time); Under / No GG only as a stricter fallback' }
@@ -600,14 +601,32 @@ function startWebhookServer(onPaymentActivated) {
           }));
         }
 
+        // Football: the user may pick tier(s) via `tier` / `tiers` (slug, array or comma list). None given -> all tiers.
+        let tiers = null;
+        if (sportKey === 'football') {
+          const rt = resolveTiers(params.tiers != null ? params.tiers : params.tier);
+          if (rt.error) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              success: false,
+              code: rt.error,
+              error: `Unknown tier: ${rt.invalid.join(', ')}. Valid tiers: ${rt.valid.join(', ')}`,
+              validTiers: rt.valid
+            }));
+          }
+          tiers = rt.tiers;
+        }
+        const cacheKey = tiers ? `${sportKey}:${tiers.join(',')}` : sportKey;
+
         // Return recent cache (within 60s) to give instant sub-50ms response if not forced fresh
-        const cached = codeCache.get(sportKey);
+        const cached = codeCache.get(cacheKey);
         if (!fresh && cached && Date.now() - cached.timestamp < 60000) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             success: true,
             cached: true,
             sport: sportKey,
+            ...(tiers ? { requestedTiers: tiers } : {}),
             count: cached.data.count,
             codes: cached.data.codes || [],
             lines: cached.data.lines || [],
@@ -626,13 +645,14 @@ function startWebhookServer(onPaymentActivated) {
 
         isGenerating = true;
         try {
-          const result = await generate(preset, userId);
+          const result = await generate(preset, userId, tiers ? { tiers } : {});
 
           if (!result.count) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({
               success: false,
               sport: sportKey,
+              ...(tiers ? { requestedTiers: tiers } : {}),
               count: 0,
               message: result.noSafe && result.noSafe.length
                 ? `${preset.label}: no safe slip right now. The selector does not lower its safety bar.`
@@ -641,13 +661,14 @@ function startWebhookServer(onPaymentActivated) {
             }));
           }
 
-          codeCache.set(sportKey, { data: result, timestamp: Date.now() });
+          codeCache.set(cacheKey, { data: result, timestamp: Date.now() });
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             success: true,
             cached: false,
             sport: sportKey,
+            ...(tiers ? { requestedTiers: tiers } : {}),
             count: result.count,
             codes: result.codes || [],
             lines: result.lines || [],

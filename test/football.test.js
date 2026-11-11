@@ -148,9 +148,72 @@ test('high_roller tier reaches target odds and is flagged high risk', () => {
   assert.ok(r.jointProb < 0.5);
 });
 
-test('tiers are Rookie / Hustler / High Roller / Legend with display names', () => {
-  assert.deepStrictEqual(Object.keys(FOOTBALL.TIERS), ['rookie', 'hustler', 'high_roller', 'legend']);
-  assert.deepStrictEqual(FOOTBALL.NAMES, { rookie: 'Rookie', hustler: 'Hustler', high_roller: 'High Roller', legend: 'Legend' });
+test('tiers are Rookie / Hustler / High Roller / Legend / Tycoon / Moonshot with display names', () => {
+  assert.deepStrictEqual(Object.keys(FOOTBALL.TIERS), ['rookie', 'hustler', 'high_roller', 'legend', 'tycoon', 'moonshot']);
+  assert.deepStrictEqual(FOOTBALL.NAMES, { rookie: 'Rookie', hustler: 'Hustler', high_roller: 'High Roller', legend: 'Legend', tycoon: 'Tycoon', moonshot: 'Moonshot' });
+});
+
+// ── Tycoon (@500-700) and Moonshot (@700-1400) ──
+test('tycoon lands inside @500-700 and moonshot inside @700-1400', () => {
+  const pe = Array.from({ length: 60 }, (_, i) => [leg(i, 0.85, 1.15, { league: 'L' + i })]);
+  const t = F.buildTierSlip('tycoon', pe), m = F.buildTierSlip('moonshot', pe);
+  assert.strictEqual(t.ok, true);
+  assert.ok(t.totalOdds >= 500 && t.totalOdds <= 700, `tycoon @${t.totalOdds}`);
+  assert.strictEqual(m.ok, true);
+  assert.ok(m.totalOdds >= 700 && m.totalOdds <= 1400, `moonshot @${m.totalOdds}`);
+  assert.ok(t.highRisk && m.highRisk);
+  assert.ok(t.legs.length <= FOOTBALL.MAX_LEGS && m.legs.length <= FOOTBALL.MAX_LEGS);
+});
+
+test('the total-odds ceiling is never exceeded: an overshooting leg is skipped for a smaller one', () => {
+  const cfg = { ...FOOTBALL, TIERS: { ...FOOTBALL.TIERS, tycoon: { ...FOOTBALL.TIERS.tycoon, targetOdds: 100, maxTotalOdds: 105 } } };
+  const big = Array.from({ length: 20 }, (_, i) => [leg(i, 0.85, 1.3, { league: 'B' + i })]);
+  const small = Array.from({ length: 10 }, (_, i) => [leg(100 + i, 0.95, 1.05, { league: 'S' + i })]);
+  const r = F.buildTierSlip('tycoon', [...big, ...small], cfg);
+  assert.strictEqual(r.ok, true);
+  assert.ok(r.totalOdds >= 100 && r.totalOdds <= 105, `@${r.totalOdds}`);
+  // only big legs: nothing fits the band
+  assert.strictEqual(F.buildTierSlip('tycoon', big, cfg).ok, false);
+});
+
+test('tycoon is unavailable when 50 legs cannot reach @500', () => {
+  const pe = Array.from({ length: 80 }, (_, i) => [leg(i, 0.85, 1.1, { league: 'L' + i })]); // 1.1^50 = 117
+  const r = F.buildTierSlip('tycoon', pe);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'no safe slip');
+});
+
+test('resolveTiers: none -> all tiers, valid names accepted, unknown rejected', () => {
+  const all = Object.keys(FOOTBALL.TIERS);
+  assert.deepStrictEqual(F.resolveTiers(undefined).tiers, all);
+  assert.deepStrictEqual(F.resolveTiers('').tiers, all);
+  assert.deepStrictEqual(F.resolveTiers('Tycoon').tiers, ['tycoon']);
+  assert.deepStrictEqual(F.resolveTiers('high roller').tiers, ['high_roller']);
+  assert.deepStrictEqual(F.resolveTiers('legend,tycoon,legend').tiers, ['legend', 'tycoon']);
+  assert.deepStrictEqual(F.resolveTiers(['rookie', 'moonshot']).tiers, ['rookie', 'moonshot']);
+  const bad = F.resolveTiers('banker');
+  assert.strictEqual(bad.error, 'invalid_tier');
+  assert.deepStrictEqual(bad.invalid, ['banker']);
+  assert.deepStrictEqual(bad.valid, all);
+});
+
+test('selectFootball builds only the requested tiers', () => {
+  const events = Array.from({ length: 6 }, (_, i) => makeEvent(`e${i}`, `H${i}`, `A${i}`, 1.9, 0.9, `League ${i}`));
+  assert.deepStrictEqual(Object.keys(F.selectFootball(events, FOOTBALL, ['tycoon']).slips), ['tycoon']);
+  assert.strictEqual(Object.keys(F.selectFootball(events).slips).length, 6);
+});
+
+test('a chosen tier builds alone and skips the Over screen when that tier cannot use Overs', async () => {
+  const sf = require('../src/safe-football');
+  const events = Array.from({ length: 30 }, (_, i) => makeEvent(`e${i}`, `Home${i}`, `Away${i}`, 1.9, 0.9, `League ${i}`));
+  const analyzed = [];
+  const analyze = async l => { analyzed.push(l.type); return { hasStats: false, reason: 'test' }; };
+  const verify = async () => [];
+  const r = await sf.generateSafeFootball({}, null, { events, dryRun: true, noRefresh: true, tiers: ['rookie'], analyze, verify });
+  assert.ok([...r.codes, ...r.noSafe].every(x => x.tier === 'rookie'));
+  assert.ok(!analyzed.includes('over'), 'no Over was sent to the stats API');
+  const all = await sf.generateSafeFootball({}, null, { events, dryRun: true, noRefresh: true, noStats: true });
+  assert.ok([...all.codes, ...all.noSafe].length >= 4, 'no tier chosen -> every tier is attempted');
 });
 
 test('legend reaches >= 100 odds using at most 50 legs', () => {

@@ -186,7 +186,7 @@ function poolFor(perEvent, tierCfg, cfg) {
   return pool;
 }
 
-function pick(pool, n, cfg, stopAtOdds, leagueCap) {
+function pick(pool, n, cfg, stopAtOdds, leagueCap, maxOdds) {
   const picked = [], teams = new Set(), perLeague = {};
   const cap = leagueCap || cfg.LEAGUE_CAP;
   const maxLegs = Math.min(n || cfg.MAX_LEGS, cfg.MAX_LEGS);
@@ -194,6 +194,8 @@ function pick(pool, n, cfg, stopAtOdds, leagueCap) {
   for (const l of pool) {
     if (picked.length >= maxLegs) break;
     if (stopAtOdds && odds >= stopAtOdds) break;
+    // A leg that would push the slip past its total-odds ceiling is skipped; a smaller-odds leg later in the pool can still finish the band.
+    if (maxOdds && odds * l.odds > maxOdds) continue;
     if ((perLeague[l.league] || 0) >= cap) continue;
     const t = teamsOf(l);
     if (t.some(x => teams.has(x))) continue;
@@ -214,10 +216,13 @@ function buildTierSlip(name, perEvent, cfg = FOOTBALL) {
   const t = cfg.TIERS[name];
   const pool = poolFor(perEvent, t, cfg);
   if (t.targetOdds) {
-    const picked = pick(pool, 0, cfg, t.targetOdds, t.leagueCap);
+    const picked = pick(pool, 0, cfg, t.targetOdds, t.leagueCap, t.maxTotalOdds);
     const s = summarize(picked);
     if (!picked.length || s.totalOdds < t.targetOdds) {
       return { tier: name, ok: false, reason: 'no safe slip', ...s, reasons: [`only reached @${s.totalOdds} of @${t.targetOdds} with ${picked.length} legs (max ${cfg.MAX_LEGS})`], poolSize: pool.length };
+    }
+    if (t.maxTotalOdds && s.totalOdds > t.maxTotalOdds) {
+      return { tier: name, ok: false, reason: 'no safe slip', ...s, reasons: [`@${s.totalOdds} is above the @${t.maxTotalOdds} ceiling`], poolSize: pool.length };
     }
     return { tier: name, ok: true, highRisk: !!t.highRisk, ...s, poolSize: pool.length };
   }
@@ -233,7 +238,7 @@ function buildTierSlip(name, perEvent, cfg = FOOTBALL) {
 }
 
 // events: [{ev, league, ko}] with ev.markets. Returns { slips: {rookie,hustler,high_roller,legend}, considered, rejects }.
-function selectFootball(events, cfg = FOOTBALL) {
+function selectFootball(events, cfg = FOOTBALL, tierNames = null) {
   const perEvent = [], rejects = [];
   for (const e of events) {
     const r = evaluateEvent(e, cfg);
@@ -241,7 +246,8 @@ function selectFootball(events, cfg = FOOTBALL) {
     if (r.legs.length) perEvent.push(r.legs);
   }
   const slips = {};
-  for (const name of Object.keys(cfg.TIERS)) slips[name] = buildTierSlip(name, perEvent, cfg);
+  const names = (tierNames && tierNames.length ? tierNames : Object.keys(cfg.TIERS)).filter(n => cfg.TIERS[n]);
+  for (const name of names) slips[name] = buildTierSlip(name, perEvent, cfg);
   return { slips, perEvent, considered: perEvent.length, eventsScanned: events.length, rejects };
 }
 
@@ -268,4 +274,24 @@ async function refreshLegs(legs, fetchEvent, cfg = FOOTBALL, cache = new Map(), 
   return { legs: kept, dropped };
 }
 
-module.exports = { selectFootball, evaluateEvent, buildTierSlip, fitEvent, candidatesOf, refreshLegs, modelProbs };
+// Which tiers the caller asked for. `input` may be a slug, an array of slugs or a comma-separated list.
+// No tier given -> every tier. Returns { tiers, all } or { error: 'invalid_tier', invalid, valid }.
+function resolveTiers(input, cfg = FOOTBALL) {
+  const valid = Object.keys(cfg.TIERS);
+  const raw = (Array.isArray(input) ? input : [input])
+    .flatMap(x => String(x == null ? '' : x).split(','))
+    .map(s => s.trim().toLowerCase().replace(/[\s-]+/g, '_'))
+    .filter(Boolean);
+  if (!raw.length) return { tiers: valid, all: true };
+  const invalid = raw.filter(t => !valid.includes(t));
+  if (invalid.length) return { error: 'invalid_tier', invalid: [...new Set(invalid)], valid };
+  return { tiers: [...new Set(raw)] };
+}
+
+// Total-odds band a tier must land in (max is Infinity for tiers without a ceiling).
+const oddsBand = (name, cfg = FOOTBALL) => {
+  const t = cfg.TIERS[name] || {};
+  return { min: t.targetOdds || 0, max: t.maxTotalOdds || Infinity };
+};
+
+module.exports = { selectFootball, evaluateEvent, buildTierSlip, fitEvent, candidatesOf, refreshLegs, modelProbs, resolveTiers, oddsBand };

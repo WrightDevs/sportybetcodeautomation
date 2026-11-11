@@ -108,9 +108,13 @@ const FOOTBALL = {
     hustler:     { legs: num('FB_HUSTLER_LEGS', 8), minLegProb: num('FB_HUSTLER_MIN_PROB', 0.84), minJoint: num('FB_HUSTLER_MIN_JOINT', 0.30), families: ['handicap', 'nogg', 'under', 'result'] },
     // Target-odds tiers are not probability-gated: they stop at the target odds (or MAX_LEGS) and are flagged highRisk.
     high_roller: { targetOdds: num('FB_HIGH_ROLLER_TARGET_ODDS', 10), minLegProb: num('FB_HIGH_ROLLER_MIN_PROB', 0.80), minJoint: 0, highRisk: true, leagueCap: num('FB_HIGH_ROLLER_LEAGUE_CAP', 3), families: ['handicap', 'nogg', 'under', 'result', 'over'] },
-    legend:     { targetOdds: num('FB_LEGEND_TARGET_ODDS', 100), minLegProb: num('FB_LEGEND_MIN_PROB', 0.70), maxLegOdds: num('FB_LEGEND_MAX_LEG_ODDS', 1.40), leagueCap: num('FB_LEGEND_LEAGUE_CAP', 4), minJoint: 0, highRisk: true, families: ['handicap', 'nogg', 'under', 'result', 'over'] }
+    legend:     { targetOdds: num('FB_LEGEND_TARGET_ODDS', 100), minLegProb: num('FB_LEGEND_MIN_PROB', 0.70), maxLegOdds: num('FB_LEGEND_MAX_LEG_ODDS', 1.40), leagueCap: num('FB_LEGEND_LEAGUE_CAP', 4), minJoint: 0, highRisk: true, families: ['handicap', 'nogg', 'under', 'result', 'over'] },
+    // Very long odds, built from the safest legs available. Total odds must land inside [targetOdds, maxTotalOdds];
+    // a wider match window (horizonHours) is needed to find 35-45 non-overlapping matches.
+    tycoon:     { targetOdds: num('FB_TYCOON_TARGET_ODDS', 500), maxTotalOdds: num('FB_TYCOON_MAX_ODDS', 700), minLegProb: num('FB_TYCOON_MIN_PROB', 0.82), maxLegOdds: num('FB_TYCOON_MAX_LEG_ODDS', 1.35), leagueCap: num('FB_TYCOON_LEAGUE_CAP', 6), horizonHours: num('FB_TYCOON_HORIZON_HOURS', 36), minJoint: 0, highRisk: true, families: ['handicap', 'nogg', 'under', 'result', 'over'] },
+    moonshot:   { targetOdds: num('FB_MOONSHOT_TARGET_ODDS', 700), maxTotalOdds: num('FB_MOONSHOT_MAX_ODDS', 1400), minLegProb: num('FB_MOONSHOT_MIN_PROB', 0.80), maxLegOdds: num('FB_MOONSHOT_MAX_LEG_ODDS', 1.35), leagueCap: num('FB_MOONSHOT_LEAGUE_CAP', 8), horizonHours: num('FB_MOONSHOT_HORIZON_HOURS', 48), minJoint: 0, highRisk: true, families: ['handicap', 'nogg', 'under', 'result', 'over'] }
   },
-  NAMES: { rookie: 'Rookie', hustler: 'Hustler', high_roller: 'High Roller', legend: 'Legend' },
+  NAMES: { rookie: 'Rookie', hustler: 'Hustler', high_roller: 'High Roller', legend: 'Legend', tycoon: 'Tycoon', moonshot: 'Moonshot' },
   TIER: { handicap: 1, dc: 1, nogg: 2, under: 3, over: 3, win: 4 },
   FAMILY: { handicap: 'handicap', dc: 'handicap', nogg: 'nogg', under: 'under', over: 'over', win: 'result' },
   JUNK_LEAGUE: /(friendl|youth|reserve|u-?(1[6-9]|2[0-3])\b|women|amateur|srl|esoccer|e-football|efootball|virtual|simulated|cyber)/i,

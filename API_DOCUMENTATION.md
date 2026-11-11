@@ -333,6 +333,7 @@ Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direc
 {
   "sport": "football",
   "userId": "user_or_email@example.com",
+  "tier": "tycoon",
   "fresh": false
 }
 ```
@@ -340,6 +341,7 @@ Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direc
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `sport` | string | **Yes** | Options: `"football"`, `"efootball"`, `"vfootball"` |
+| `tier` / `tiers` | string or string[] | Optional (football only) | The tier(s) the user wants: `"rookie"`, `"hustler"`, `"high_roller"`, `"legend"`, `"tycoon"`, `"moonshot"`. `tier` takes one slug or a comma list (`"legend,tycoon"`); `tiers` takes an array. **If omitted, every tier is generated.** Choosing one tier is faster and puts the whole stats/AI budget into that tier. Ignored for `efootball` / `vfootball`. An unknown tier returns `400` (see below) |
 | `userId` | string | **Yes** | The account's Mongo `_id`, email, username or Telegram id. **The user must have an active VIP subscription** (see the 403 response below). Also used to attribute slips for win-rate tracking |
 | `fresh` | boolean | Optional | Default `false`. If `true`, forces a live scraper run bypassing the 60s cache |
 
@@ -353,6 +355,17 @@ Mints fresh, ranked SportyBet booking code(s) with pre-calculated odds and direc
 }
 ```
 Handle `code === "subscription_required"` by showing the upgrade / pay screen. Requests without a `userId` are treated as not subscribed.
+
+#### Unknown Tier (`400 Bad Request`)
+```json
+{
+  "success": false,
+  "code": "invalid_tier",
+  "error": "Unknown tier: banker. Valid tiers: rookie, hustler, high_roller, legend, tycoon, moonshot",
+  "validTiers": ["rookie", "hustler", "high_roller", "legend", "tycoon", "moonshot"]
+}
+```
+Football responses (success, cached and "no safe slip") also include `"requestedTiers": ["tycoon"]` (the tiers that were attempted). The 60-second cache is kept per sport **and** per tier selection, so asking for a different tier never returns another tier's codes.
 
 #### Success Response (`200 OK`)
 ```json
@@ -410,9 +423,9 @@ Handle `code === "subscription_required"` by showing the upgrade / pay screen. R
 
 **Football changes (the route, method and request body are unchanged):**
 - `codes` holds **up to 4** items, one per tier, each with **at most 50 legs**. Select by `tier`, not by position.
-- `tier` is a slug: `"rookie"` | `"hustler"` | `"high_roller"` | `"legend"`. `tierName` is the display label: `"Rookie"`, `"Hustler"`, `"High Roller"`, `"Legend"`. (Earlier drafts used banker / safe / long.)
-- **Rookie**: ~4 legs, handicap / double chance only, low total odds (typically @1.1-1.3). **Hustler**: ~8 legs. **High Roller**: about @10. **Legend**: @100 or more, up to 50 legs.
-- Optional fields on each football code: `tier`, `tierName`, `jointProb` (0-1 estimated probability that every leg wins), `statsVerified` (`true` when shortlisted matches are audited against 5DollarFootballAPI live team stats and AI risk verification) and `highRisk` (`true` for High Roller and Legend). `odds`, `legsCount`, `code`, `url`, `sport` keep their meaning. `efootball` / `vfootball` responses are unchanged.
+- `tier` is a slug: `"rookie"` | `"hustler"` | `"high_roller"` | `"legend"` | `"tycoon"` | `"moonshot"`. `tierName` is the display label: `"Rookie"`, `"Hustler"`, `"High Roller"`, `"Legend"`, `"Tycoon"`, `"Moonshot"`. (Earlier drafts used banker / safe / long.)
+- **Rookie**: ~4 legs, handicap / double chance only, low total odds (typically @1.1-1.3). **Hustler**: ~8 legs. **High Roller**: about @10. **Legend**: @100 or more, up to 50 legs. **Tycoon**: total odds between @500 and @700 (about 34-40 legs). **Moonshot**: total odds between @700 and @1400 (about 38-48 legs). Tycoon and Moonshot are built from the safest legs available, but they are **long shots**: do not describe them as "safe" or show a win percentage. They search a wider match window (36 h / 48 h), so they are often "not available right now" and can take up to ~3 minutes. Keep the client timeout at 180 s or more.
+- Optional fields on each football code: `tier`, `tierName`, `jointProb` (0-1 estimated probability that every leg wins), `statsVerified` (`true` when shortlisted matches are audited against 5DollarFootballAPI live team stats and AI risk verification) and `highRisk` (`true` for High Roller, Legend, Tycoon and Moonshot). `odds`, `legsCount`, `code`, `url`, `sport` keep their meaning. `efootball` / `vfootball` responses are unchanged.
 - **Do not show `jointProb` to end users.** It stays in the API for the dashboard's own use (sorting, analytics, admin views). The `lines` strings contain no probabilities.
 - A tier that cannot be built is simply missing from `codes` (for example Legend when 50 legs cannot reach @100); `lines` then has a `"<Tier>: not available right now"` entry. `count` equals `codes.length`.
 - Probabilities are estimates, not guarantees. Legend in particular is a long shot, so keep a general disclaimer in the UI.
@@ -460,7 +473,7 @@ Returns metadata for all available sports to populate UI tabs and buttons.
       "id": "football",
       "name": "Football",
       "icon": "⚽",
-      "desc": "Real fixtures: Rookie, Hustler, High Roller and Legend slips (handicap / double chance first)"
+      "desc": "Real fixtures: pick a tier (Rookie, Hustler, High Roller, Legend, Tycoon or Moonshot) or get them all"
     },
     {
       "id": "efootball",
@@ -1043,10 +1056,10 @@ export interface SportyCode {
   tier?: FootballTier;  // football only
   tierName?: string;    // football only, display label e.g. 'High Roller'
   jointProb?: number;   // football only, 0-1 estimate. Do NOT show to end users.
-  highRisk?: boolean;   // football only: true for 'high_roller' and 'legend'
+  highRisk?: boolean;   // football only: true for 'high_roller', 'legend', 'tycoon' and 'moonshot'
 }
 
-export type FootballTier = 'rookie' | 'hustler' | 'high_roller' | 'legend';
+export type FootballTier = 'rookie' | 'hustler' | 'high_roller' | 'legend' | 'tycoon' | 'moonshot';
 
 export interface NoSafeSlipTier {
   tier: FootballTier;

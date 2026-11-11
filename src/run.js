@@ -11,10 +11,11 @@ const { recordSlip } = require('./tracker');
 const { generateSafeFootball } = require('./safe-football');
 const { FOOTBALL } = require('./selection/config');
 
-async function generate(preset, userId = null) {
+// opts.tiers (football only): the tier slugs the user asked for; only those are built.
+async function generate(preset, userId = null, opts = {}) {
   // Normal football: probability-based tiered slips (FB_LEGACY=on restores the old lowest-odds scan).
   if (preset.key === 'football' && preset.mode !== 'live' && !FOOTBALL.LEGACY) {
-    return generateSafeFootball(preset, userId);
+    return generateSafeFootball(preset, userId, opts);
   }
   let legs = preset.mode === 'live' ? await scanLive(preset) : await scan(preset);
 

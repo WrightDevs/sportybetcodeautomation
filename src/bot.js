@@ -2,6 +2,8 @@
 const { CFG } = require('./config');
 const { PRESETS } = require('./presets');
 const { generate } = require('./run');
+const { FOOTBALL } = require('./selection/config');
+const { resolveTiers } = require('./selection/football');
 const { sleep } = require('./util');
 const {
   isAdmin,
@@ -79,7 +81,7 @@ function getPaywallMenu() {
 const HELP = `<b>SportyBet Daily Codes VIP</b>\n\n`
   + `Select an option below:\n\n`
   + `• <b>Quest Special</b> — live in-play sniper signals\n`
-  + `• <b>Football</b> — real fixtures accumulator\n`
+  + `• <b>Football</b> — real fixtures; pick a tier (Rookie to Moonshot) or get all\n`
   + `• <b>eFootball</b> — in-play leader\n`
   + `• <b>vFootball</b> — live virtual matches`;
 
@@ -192,7 +194,20 @@ async function handleCheckRef(chat, messageId, reference) {
   });
 }
 
-async function handleSport(chat, key) {
+// Football tier picker: the user chooses what to generate; "All tiers" keeps the old behaviour.
+const TIER_HINTS = { rookie: '~4 legs', hustler: '~8 legs', high_roller: '@10', legend: '@100+', tycoon: '@500-700', moonshot: '@700-1400' };
+function tierMenu() {
+  const rows = [];
+  const slugs = Object.keys(FOOTBALL.TIERS);
+  for (let i = 0; i < slugs.length; i += 2) {
+    rows.push(slugs.slice(i, i + 2).map(s => ({ text: `${FOOTBALL.NAMES[s]} ${TIER_HINTS[s] || ''}`.trim(), callback_data: `fbtier:${s}` })));
+  }
+  rows.push([{ text: 'All tiers', callback_data: 'fbtier:all' }]);
+  rows.push([{ text: 'Back to Menu', callback_data: 'menu' }]);
+  return { inline_keyboard: rows };
+}
+
+async function handleSport(chat, key, opts = {}) {
   if (!isSubscribed(chat)) {
     return sendPaywall(chat);
   }
@@ -200,13 +215,18 @@ async function handleSport(chat, key) {
   const preset = PRESETS[key];
   if (!preset) return send(chat, 'Unknown option.', { reply_markup: sportsMenu });
 
+  // Football without a tier choice: ask which one (Tycoon / Moonshot take longer, so say so).
+  if (key === 'football' && !opts.tiers && !opts.all) {
+    return send(chat, `<b>Football</b> — choose a tier:\n\nHigher tiers carry much longer odds and a lower chance of winning. Tycoon and Moonshot are long shots and can take up to 3 minutes.`, { reply_markup: tierMenu() });
+  }
+
   if (busy.has(chat)) return send(chat, 'Still working on your previous request… please wait a moment.');
 
   busy.add(chat);
   await send(chat, `${preset.icon} scanning ${preset.label}…`);
 
   try {
-    const { lines, count, noSafe } = await generate(preset, chat);
+    const { lines, count, noSafe } = await generate(preset, chat, opts.tiers ? { tiers: opts.tiers } : {});
     if (!count) {
       await send(chat, noSafe && noSafe.length
         ? `${preset.label}: no safe slip right now — the system will not lower its bar.\n\n` + lines.join('\n')
@@ -609,6 +629,10 @@ async function poll() {
             await launchQuestSpecialSession(chat, { mode: 'any', legs: 5 });
           } else if (data === 'stop_quest_special') {
             await handleStopQuestSpecial(chat);
+          } else if (data.startsWith('fbtier:')) {
+            const slug = data.slice(7);
+            if (slug === 'all') await handleSport(chat, 'football', { all: true });
+            else if (FOOTBALL.TIERS[slug]) await handleSport(chat, 'football', { tiers: [slug] });
           } else if (['football', 'efootball', 'vfootball'].includes(data)) {
             await handleSport(chat, data);
           }
@@ -689,6 +713,15 @@ async function poll() {
           await handleGlobalStats(chat);
         } else if (cmd === '/subscribe' || cmd === '/pay') {
           sendPaywall(chat);
+        } else if (cmd === '/football' && parts[1]) {
+          // /football tycoon | /football high roller | /football all
+          const arg = parts.slice(1).join(' ');
+          if (arg.toLowerCase() === 'all') await handleSport(chat, 'football', { all: true });
+          else {
+            const rt = resolveTiers(arg);
+            if (rt.error) await send(chat, `Unknown tier. Choose one of: ${rt.valid.map(s => FOOTBALL.NAMES[s]).join(', ')} or "all".`);
+            else await handleSport(chat, 'football', { tiers: rt.tiers });
+          }
         } else if (['/football', '/efootball', '/vfootball'].includes(cmd)) {
           await handleSport(chat, cmd.slice(1));
         } else if (cmd === '/questspecial' || cmd === '/special') {
