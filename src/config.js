@@ -51,7 +51,7 @@ const CFG = {
   WEBHOOK_PORT: N('PORT', N('WEBHOOK_PORT', 3000)),
   QUESTPAY_LINK: E('QUESTPAY_LINK', ''),
   QUESTPAY_API_KEY: E('QUESTPAY_API_KEY', 'qp_live_sk__qvGz-EF1ipoL6NzCGyU3dhJCy1MtVCn'),
-  QUESTPAY_API_URL: E('QUESTPAY_API_URL', 'https://payments-api.questlabs.cc/api'),
+  QUESTPAY_API_URL: E('QUESTPAY_API_URL', 'https://payments-backend.questlabs.cc/api'),
   QUESTPAY_WEBHOOK_SECRET: E('QUESTPAY_WEBHOOK_SECRET', ''),
   BANK_NAME: E('BANK_NAME', 'OPay'),
   ACCOUNT_NUMBER: E('ACCOUNT_NUMBER', ''),

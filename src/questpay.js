@@ -2,7 +2,8 @@
 const { CFG } = require('./config');
 const { registerCheckout } = require('./db');
 
-const BASE_URL = (CFG.QUESTPAY_API_URL || 'https://payments-api.questlabs.cc/api').replace(/\/+$/, '');
+const rawBase = (CFG.QUESTPAY_API_URL || 'https://payments-backend.questlabs.cc/api').replace(/\/+$/, '');
+const BASE_URL = /\/api$/i.test(rawBase) ? rawBase : `${rawBase}/api`;
 
 /**
  * Initialize a hosted QuestPay v1 checkout session
